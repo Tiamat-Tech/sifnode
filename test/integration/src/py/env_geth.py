@@ -1,33 +1,15 @@
-import argparse
+import json
 import subprocess
-import textwrap
-from dataclasses import dataclass
-from typing import List
 
-from env_utilities import SifchainCmdInput, SifchainCmdOutput, wait_for_port
-
-
-@dataclass
-class GethInput(SifchainCmdInput):
-    logfile: str
-    chain_id: str
-    network_id: str
-    http_port: int
-    ws_port: int
-    ethereum_addresses: List[str]
-    starting_ethereum: int = 100
+import env_ethereum
+import env_utilities
+from env_utilities import wait_for_port
+from pathlib import Path
 
 
-@dataclass
-class GethOutput(SifchainCmdOutput):
-    """geth has no special output that we need to use"""
-    pass
-
-
-def geth_cmd(args: GethInput) -> str:
+def geth_cmd(args: env_ethereum.EthereumInput) -> str:
     apis = "personal,eth,net,web3,debug"
     cmd = " ".join([
-        "nohup",
         "geth",
         f"--networkid {args.network_id}",
         f"--ws --ws.addr 0.0.0.0 --ws.port {args.ws_port} --ws.api {apis}",
@@ -39,7 +21,8 @@ def geth_cmd(args: GethInput) -> str:
     return cmd
 
 
-def start_geth(args: GethInput) -> None:
+def start_geth(args: env_ethereum.EthereumInput):
+    """returns an object with a wait() method"""
     cmd = geth_cmd(args)
     logfile = open(args.logfile, "w")
     proc = subprocess.Popen(
@@ -51,51 +34,12 @@ def start_geth(args: GethInput) -> None:
     )
     wait_for_port("localhost", args.ws_port)
     wait_for_port("localhost", args.http_port)
-    print("geth running")
-    proc.wait()
+    Path(args.pidfile).write_text(str(proc.pid))
+    return proc
 
 
-def parse_geth_args() -> GethInput:
-    """Turn command line arguments into GethInput"""
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent("""
-    start geth
-    """))
-    parser.add_argument('--logfile', required=True)
-    parser.add_argument('--chain_id', required=True)
-    parser.add_argument('--network_id', required=True)
-    parser.add_argument('--ws_port', required=True)
-    parser.add_argument('--http_port', required=True)
-    parser.add_argument('--ethereum_addresses', required=True)
-    parser.add_argument('--starting_ethereum', type=int, default=100)
-    result = parser.parse_args()
-    print(f"tyeargs: {result}")
-    return result
-
-
-def parsed_args_to_geth_input(args: argparse.Namespace) -> GethInput:
-    return GethInput(
-        logfile=args.logfile,
-        chain_id=args.chain_id,
-        network_id=args.network_id,
-        http_port=args.http_port,
-        ws_port=args.ws_port,
-        ethereum_addresses=args.ethereum_addresses,
-    )
-
-
-geth_input = parsed_args_to_geth_input(parse_geth_args())
-print(f"gethtinput: {geth_input}")
-assert False
-
-geth_opts = GethInput(
-    logfile="/tmp/gethlog.txt",
-    chain_id=3,
-    network_id=3,
-    http_port=7545,
-    ws_port=8646,
-    ethereum_addresses=["a", "b"],
-    starting_ethereum=100
-)
-start_geth(geth_opts)
+env_utilities.atomic_write("fnord", "/tmp/fnord")
+parsed_args = env_ethereum.ethereum_args_parser(env_utilities.default_cmdline_parser()).parse_args()
+geth_input = env_ethereum.parsed_args_to_ethereum_input(parsed_args)
+start_geth(geth_input)
+print(geth_input.as_json())

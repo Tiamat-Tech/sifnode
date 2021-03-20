@@ -1,6 +1,6 @@
-from env_geth import GethInput, start_geth
+from env_geth import EthereumInput, start_geth
 
-geth_opts = GethInput(
+geth_opts = EthereumInput(
     logfile="/tmp/gethlog.txt",
     chain_id=3,
     network_id=3,
