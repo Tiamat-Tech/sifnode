@@ -17,7 +17,9 @@ class SifchainCmdParameters(dict):
 
 @dataclass
 class SifchainCmdInput(SifchainCmdParameters):
+    logfile: str
     pidfile: str
+    configoutputfile: str
 
 
 @dataclass
@@ -30,27 +32,41 @@ def wait_for_port(host, port) -> bool:
         try:
             with socket.create_connection((host, port)):
                 return True
-        except ConnectionRefusedError as e:
+        except (ConnectionRefusedError, OSError) as e:
             time.sleep(1)
     return False
-
-
-def default_cmdline_parser():
-    return argparse.ArgumentParser(
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=textwrap.dedent(
-            """
-            start geth
-            * add tokens to users in ethereum_addresses
-            * don't return until geth is listening to ws and http ports
-            """
-        )
-    )
 
 
 def atomic_write(s: str, filename: str):
     output = Path(filename)
     output.unlink(missing_ok=True)
-    with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(output), delete=False) as temp:
+    with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(output)) as temp:
         temp.write(s)
+        temp.flush()
         os.link(temp.name, output)
+
+
+def default_cmdline_parser():
+    return argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+
+def sifchain_cmd_input_parser(parser = None) -> argparse.ArgumentParser:
+    """Turn command line arguments into EthereumInput"""
+    if parser is None:
+        parser = default_cmdline_parser()
+    parser.add_argument('--logfile', required=True)
+    parser.add_argument('--pidfile', required=True)
+    parser.add_argument('--configoutputfile', required=True)
+    return parser
+    # result = parser.parse_args()
+    # print(f"tyeargs: {result}")
+    # return result
+
+
+def startup_complete(args, process_id):
+    Path(args.pidfile).write_text(str(process_id))
+    Path(args.configoutputfile).write_text(args.as_json())
+
+
