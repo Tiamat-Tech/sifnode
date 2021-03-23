@@ -1,3 +1,4 @@
+import yaml
 import subprocess
 from dataclasses import dataclass
 
@@ -59,6 +60,7 @@ def ganache_docker_compose(args: GanacheInput):
 def start_ganache(args: GanacheInput):
     """returns an object with a wait() method"""
     cmd = ganache_cmd(args)
+    print(f"start ganache with {yaml.dump(args)}")
     logfile = open(args.logfile, "w")
     proc = subprocess.Popen(
         cmd,
