@@ -70,3 +70,5 @@ def startup_complete(args, process_id):
     Path(args.configoutputfile).write_text(args.as_json())
 
 
+def docker_compose_command(component: str)->str:
+    return f"python3 src/py/env_framework.py {component}"

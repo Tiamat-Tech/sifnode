@@ -1,8 +1,17 @@
 import subprocess
+from dataclasses import dataclass
+from typing import List
 
 import env_ethereum
 import env_utilities
 from env_utilities import wait_for_port
+
+
+@dataclass
+class GethInput(env_ethereum.EthereumInput):
+    http_port: int
+    ws_port: int
+    ethereum_addresses: List[str]
 
 
 def geth_cmd(args: env_ethereum.EthereumInput) -> str:
@@ -24,7 +33,7 @@ def fund_initial_accounts(args: env_ethereum.EthereumInput):
     quote = '"'
     for addr in args.ethereum_addresses:
         quotedaddr = f"\\{quote}{addr}\\{quote}"
-        cmd = f'geth attach /tmp/gethdata/geth.ipc --exec "eth.sendTransaction({{from:eth.coinbase, to:{quotedaddr}, value:{args.starting_ethereum * 10 ** 18}}})"'
+        cmd = f'geth attach /tmp/gethdata/geth.ipc --exec "eth.sendTransaction({{from:eth.coinbase, to:{quotedaddr}, value:{args.starting_ether * 10 ** 18}}})"'
         subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for addr in args.ethereum_addresses:
         quotedaddr = f"\\{quote}{addr}\\{quote}"
@@ -39,7 +48,7 @@ def fund_initial_accounts(args: env_ethereum.EthereumInput):
                 timeout=10,
             )
             balance = int(float(balance_result.stdout))
-            if balance >= args.starting_ethereum:
+            if balance >= args.starting_ether:
                 break;
 
 
@@ -54,15 +63,14 @@ def geth_docker_compose(args: env_ethereum.EthereumInput):
     ]
     image = "sifdocker:latest"
     return {
-        "services": {
-            "geth": {
-                "image": image,
-                "ports": ports,
-                "networks": [network],
-                "volumes": volumes,
-                "working_dir": "/sifnode/test/integration",
-                "command": "python3 src/py/env_start_geth.py go"
-            }
+        "geth": {
+            "image": image,
+            "ports": ports,
+            "networks": [network],
+            "volumes": volumes,
+            "working_dir": "/sifnode/test/integration",
+            "container_name": "geth",
+            "command": env_utilities.docker_compose_command("geth")
         }
     }
 
