@@ -17,8 +17,8 @@ class SifchainCmdParameters(dict):
 
 @dataclass
 class SifchainCmdInput(SifchainCmdParameters):
+    basedir: str
     logfile: str
-    pidfile: str
     configoutputfile: str
 
 

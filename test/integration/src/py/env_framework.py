@@ -8,22 +8,20 @@ import env_ethereum
 import env_ganache
 import env_geth
 from env_geth import start_geth
+import env_utilities
 
-
-@dataclass
-class GethInput(env_ethereum.EthereumInput):
-    http_port: int
-    ws_port: int
-    ethereum_addresses: List[str]
-
+sifchain_input = env_utilities.SifchainCmdInput(
+    basedir="/sifnode",
+    logfile="/tmp/logfile.txt",
+    configoutputfile="/tmp/myconfig.txt"
+)
 
 ethereum_input = env_ethereum.EthereumInput(
-    logfile="/tmp/logfile.txt",
+    **sifchain_input.__dict__,
     chain_id=3,
     network_id=3,
     starting_ether=123,
     pidfile="/tmp/pidfile.txt",
-    configoutputfile="/tmp/myconfig.txt"
 )
 
 geth_input = env_geth.GethInput(

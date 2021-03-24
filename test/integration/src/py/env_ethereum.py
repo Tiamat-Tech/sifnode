@@ -9,6 +9,7 @@ from env_utilities import SifchainCmdInput, SifchainCmdOutput, sifchain_cmd_inpu
 @dataclass
 class EthereumInput(SifchainCmdInput):
     logfile: str
+    pidfile: str
     chain_id: str
     network_id: str
     starting_ether: int
