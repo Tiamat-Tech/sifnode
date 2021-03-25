@@ -10,8 +10,8 @@ import env_ethereum
 
 
 @dataclass
-class SmartContractDeployInput(env_utilities.SifchainCmdInput):
-    ws_port: int
+class SifnodedRunner(env_utilities.SifchainCmdInput):
+    ethereum_ws_port: int
     truffle_network: str
     validator_addresses: List[str]
 
