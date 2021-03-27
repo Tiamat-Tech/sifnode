@@ -17,24 +17,20 @@ class SmartContractDeployInput(env_utilities.SifchainCmdInput):
 
 
 def smartcontractrunner_docker_compose(args: env_ethereum.EthereumInput):
-    ports = [
-        f"{args.ws_port}:{args.ws_port}",
-        f"{args.http_port}:{args.http_port}",
-    ]
+    name = "smartcontractrunner"
     network = "sifchaintest"
     volumes = [
         "../..:/sifnode"
     ]
     image = "sifdocker:latest"
     return {
-        "geth": {
+        name: {
             "image": image,
-            "ports": ports,
             "networks": [network],
             "volumes": volumes,
             "working_dir": "/sifnode/test/integration",
-            "container_name": "geth",
-            "command": env_utilities.docker_compose_command("geth")
+            "container_name": name,
+            "command": env_utilities.docker_compose_command(name)
         }
     }
 

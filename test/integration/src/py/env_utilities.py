@@ -1,16 +1,16 @@
 import argparse
 import json
 import os
+import pathlib
 import socket
 import tempfile
-import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 
 @dataclass
-class SifchainCmdParameters(dict):
+class SifchainCmdParameters():
     def as_json(self):
         return json.dumps(self.__dict__)
 
@@ -25,6 +25,20 @@ class SifchainCmdInput(SifchainCmdParameters):
 @dataclass
 class SifchainCmdOutput(SifchainCmdParameters):
     pass
+
+
+def base_docker_compose(name: str):
+    volumes = [
+        "../..:/sifnode"
+    ]
+    image = "sifdocker:latest"
+    return {
+        "image": image,
+        "volumes": volumes,
+        "working_dir": "/sifnode/test/integration",
+        "container_name": name,
+        "command": docker_compose_command("ganache"),
+    }
 
 
 def wait_for_port(host, port) -> bool:
@@ -52,23 +66,32 @@ def default_cmdline_parser():
     )
 
 
-def sifchain_cmd_input_parser(parser = None) -> argparse.ArgumentParser:
+def sifchain_cmd_input_parser(parser=None) -> argparse.ArgumentParser:
     """Turn command line arguments into EthereumInput"""
     if parser is None:
         parser = default_cmdline_parser()
     parser.add_argument('--logfile', required=True)
-    parser.add_argument('--pidfile', required=True)
     parser.add_argument('--configoutputfile', required=True)
     return parser
-    # result = parser.parse_args()
-    # print(f"tyeargs: {result}")
-    # return result
 
 
-def startup_complete(args, process_id):
-    Path(args.pidfile).write_text(str(process_id))
-    Path(args.configoutputfile).write_text(args.as_json())
+def startup_complete(args, config):
+    Path(args.configoutputfile).write_text(json.dumps({
+        "input": args.__dict__,
+        "config": config
+    }))
 
 
-def docker_compose_command(component: str)->str:
+def docker_compose_command(component: str) -> str:
     return f"python3 src/py/env_framework.py {component}"
+
+
+def open_and_create_parent_dirs(f: str):
+    pathlib.Path(f).parent.mkdir(exist_ok=True)
+    return open(f, "w")
+
+
+def read_json_file(json_filename):
+    with open(json_filename, mode="r") as json_file:
+        contents = json_file.read()
+        return json.loads(contents)

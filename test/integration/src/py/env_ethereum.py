@@ -9,7 +9,6 @@ from env_utilities import SifchainCmdInput, SifchainCmdOutput, sifchain_cmd_inpu
 @dataclass
 class EthereumInput(SifchainCmdInput):
     logfile: str
-    pidfile: str
     chain_id: str
     network_id: str
     starting_ether: int
@@ -41,7 +40,6 @@ def parsed_args_to_ethereum_input(args: argparse.Namespace) -> EthereumInput:
         http_port=args.http_port,
         ws_port=args.ws_port,
         ethereum_addresses=args.ethereum_addresses.split(','),
-        pidfile=args.pidfile,
         configoutputfile=args.configoutputfile,
         starting_ether=args.starting_ether,
     )
