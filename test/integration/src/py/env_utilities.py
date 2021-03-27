@@ -29,7 +29,9 @@ class SifchainCmdOutput(SifchainCmdParameters):
 
 def base_docker_compose(name: str):
     volumes = [
-        "../..:/sifnode"
+        "../..:/sifnode",
+        "./configs:/configs",
+        "./logs:/logs",
     ]
     image = "sifdocker:latest"
     return {
@@ -37,7 +39,7 @@ def base_docker_compose(name: str):
         "volumes": volumes,
         "working_dir": "/sifnode/test/integration",
         "container_name": name,
-        "command": docker_compose_command("ganache"),
+        "command": docker_compose_command(name),
     }
 
 

@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import time
 
@@ -9,8 +10,8 @@ import env_geth
 import env_smartcontractrunner
 from env_geth import start_geth
 
-configbase = "/tmp/configs"
-logbase = "/tmp/logs/"
+configbase = "/configs"
+logbase = "/logs/"
 
 ganachename = "ganache"
 gethname = "geth"
@@ -39,10 +40,14 @@ geth_input = env_geth.GethInput(
     configoutputfile=config_file_full_path(gethname)
 )
 
+ganache_ws_port = 7545
+ganache_ws_addr = f"ws://ganache:{ganache_ws_port}"
+ganache_network_id = 5777
+
 ganache_input = env_ganache.GanacheInput(
     basedir=basedir,
     logfile=log_file_full_path(ganachename),
-    network_id=3,
+    network_id=ganache_network_id,
     chain_id=3,
     starting_ether=123,
     port=7545,
@@ -50,6 +55,17 @@ ganache_input = env_ganache.GanacheInput(
     mnemonic=None,
     db_dir="/tmp/ganachedb",
     configoutputfile=config_file_full_path(ganachename),
+)
+
+smartcontractrunner_input = env_smartcontractrunner.SmartContractDeployInput(
+    basedir=basedir,
+    network_id=ganache_network_id,
+    logfile=log_file_full_path(env_smartcontractrunner.smartcontractrunner_name + "deploy"),
+    configoutputfile=None,
+    ws_addr=ganache_ws_addr,
+    truffle_network="dynamic",
+    operator_private_key="c87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3",
+    validator_addresses=["a", "b"],
 )
 
 geth_docker = env_geth.geth_docker_compose(geth_input)
@@ -84,3 +100,5 @@ elif component == "ganache":
     env_ganache.start_ganache(ganache_input).wait()
 elif component == "smartcontractrunner":
     time.sleep(100000000)
+elif component == "deploy_contracts":
+    env_smartcontractrunner.deploy_contracts(smartcontractrunner_input)

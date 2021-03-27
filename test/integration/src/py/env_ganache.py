@@ -42,16 +42,12 @@ def ganache_docker_compose(args: GanacheInput):
         f"{args.port}:{args.port}",
     ]
     network = "sifchaintest"
-    volumes = [
-        "../..:/sifnode"
-    ]
     image = "sifdocker:latest"
     return {
         "ganache": {
             **base,
             "ports": ports,
             "networks": [network],
-            "volumes": volumes,
             "working_dir": "/sifnode/test/integration",
             "container_name": "ganache",
             "command": env_utilities.docker_compose_command("ganache")

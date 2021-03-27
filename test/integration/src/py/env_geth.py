@@ -7,6 +7,9 @@ import env_utilities
 from env_utilities import wait_for_port
 
 
+gethname = "geth"
+
+
 @dataclass
 class GethInput(env_ethereum.EthereumInput):
     http_port: int
@@ -53,24 +56,18 @@ def fund_initial_accounts(args: env_ethereum.EthereumInput):
 
 
 def geth_docker_compose(args: env_ethereum.EthereumInput):
+    base = env_utilities.base_docker_compose(gethname)
     ports = [
         f"{args.ws_port}:{args.ws_port}",
         f"{args.http_port}:{args.http_port}",
     ]
     network = "sifchaintest"
-    volumes = [
-        "../..:/sifnode"
-    ]
-    image = "sifdocker:latest"
     return {
-        "geth": {
-            "image": image,
+        gethname: {
+            **base,
             "ports": ports,
             "networks": [network],
-            "volumes": volumes,
             "working_dir": "/sifnode/test/integration",
-            "container_name": "geth",
-            "command": env_utilities.docker_compose_command("geth")
         }
     }
 
