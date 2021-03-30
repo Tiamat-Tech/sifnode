@@ -7,7 +7,7 @@ import env_ethereum
 import env_utilities
 from env_utilities import wait_for_port
 
-gethname = "sifnoded"
+sifnodename = "sifnoded"
 
 
 @dataclass
