@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import os
 import sys
 import time
@@ -7,6 +8,7 @@ import yaml
 
 import env_ganache
 import env_geth
+import env_sifnoded
 import env_smartcontractrunner
 import env_utilities
 from env_geth import start_geth
@@ -67,9 +69,22 @@ smartcontractrunner_input = env_smartcontractrunner.SmartContractDeployInput(
     validator_addresses=["a", "b"],
 )
 
+sifnoded_input = env_sifnoded.SifnodedRunner(
+    basedir=basedir,
+    bin_prefix=os.path.join("/gobin"),
+    logfile=log_file_full_path(ganachename),
+    configoutputfile=config_file_full_path(env_sifnoded.sifnodename),
+    rpc_port=26657,
+    chain_id="localnet",
+    network_config_file="/tmp/netconfig.yml",
+    seed_ip_address="10.10.1.1",
+    n_validators=1
+)
+
 geth_docker = env_geth.geth_docker_compose(geth_input)
 ganache_docker = env_ganache.ganache_docker_compose(ganache_input)
 smartcontractrunner_docker = env_smartcontractrunner.smartcontractrunner_docker_compose(ganache_input)
+sifnodedrunner = env_sifnoded.sifnoded_docker_compose(sifnoded_input)
 
 shared_docker = {
     "version": "3.9",
@@ -89,6 +104,7 @@ if component == "dockerconfig":
             **ganache_docker,
             **geth_docker,
             **smartcontractrunner_docker,
+            **sifnodedrunner,
         }
     }))
 elif component == "geth":
@@ -111,3 +127,8 @@ elif component == "deploy_contracts":
         i = dataclasses.replace(smartcontractrunner_input, operator_private_key=k)
         env_smartcontractrunner.deploy_contracts(smartcontractrunner_input)
         break
+elif component == "startsifnoded":
+    rslt = env_sifnoded.build_chain(sifnoded_input)
+    print(f"doneasdf: \n{json.dumps(rslt)}")
+    env_sifnoded.run(sifnoded_input, rslt)
+

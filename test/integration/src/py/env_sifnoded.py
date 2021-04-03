@@ -1,151 +1,137 @@
+import json
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from typing import List
 
-import env_ethereum
+import yaml
+
 import env_utilities
-from env_utilities import wait_for_port
 
 sifnodename = "sifnoded"
 
 
 @dataclass
 class SifnodedRunner(env_utilities.SifchainCmdInput):
-    ethereum_ws_port: int
+    rpc_port: int
     n_validators: int
     chain_id: str
+    network_config_file: str
+    seed_ip_address: str
+    bin_prefix: str
 
 
-def sifnoded_genesis_cmd(args: SifnodedRunner) -> str:
-    return f"BASEDIR=${args.basedir} rake genesis:network:scaffold['{args.chain_id}']"
+# sequence
+# rake genesis does:
+# sifgen network create #{chainnet} #{validator_count} #{build_dir} #{seed_ip_address} #{network_config}")
+def set_fields(args: SifnodedRunner):
+    return {
+        "networkdir": tempfile.mkdtemp(),
+        "network_config_file": tempfile.NamedTemporaryFile(delete=False, suffix=".yml").name
+    }
 
 
-def sifnoded_cmd(args: SifnodedRunner) -> str:
-    cmd = " ".join([
-        "geth",
-        "--datadir /tmp/gethdata",
-        f"--networkid {args.network_id}",
-        f"--ws --ws.addr 0.0.0.0 --ws.port {args.ws_port} --ws.api {apis}",
-        f"--http --http.addr 0.0.0.0 --http.port {args.http_port} --http.api {apis}",
-        "--dev --dev.period 1",
-        "--mine --miner.threads=1",
-    ])
-    return cmd
+def sifgen_network_create_cmd(args: SifnodedRunner, fields) -> str:
+    ndir = fields["networkdir"]
+    nf = fields["network_config_file"]
+    return f"{args.bin_prefix}/sifgen network create {args.chain_id} {args.n_validators} {ndir} {args.seed_ip_address} {nf}"
 
 
-def create_initial_accounts(n: int):
-    return list(map(lambda _: create_account(), range(n)))
+def build_chain(args: SifnodedRunner):
+    fields = set_fields(args)
+    network_create_cmd = sifgen_network_create_cmd(args, fields)
+    ox = subprocess.run(
+        network_create_cmd,
+        capture_output=True,
+        shell=True
+    )
+    if ox.returncode != 0:
+        raise Exception(f"failed to execute {network_create_cmd}: {ox}")
+    with open(fields["network_config_file"]) as f:
+        validators = yaml.safe_load(f)
+        print(f"ncc: \n{network_create_cmd}")
+    for v in validators:
+        p = v["password"]
+        nd = fields["networkdir"]
+        base_path = os.path.join(nd, "validators", args.chain_id, v["moniker"])
+        sifnodeclipath = os.path.join(base_path, ".sifnodecli")
+        sifnodedpath = os.path.join(base_path, ".sifnoded")
+        v["sifnodeclipath"] = sifnodeclipath
+        v["sifnodedpath"] = sifnodedpath
+        m = v["moniker"]
+        o = subprocess.run(
+            f"yes {p} | {args.bin_prefix}/sifnodecli keys show -a --bech val {m} --home {sifnodeclipath}",
+            shell=True,
+            text=True,
+            capture_output=True
+        )
+        valoper = o.stdout.strip()
+        v["sifvaloper"] = valoper
+        subprocess.run(
+            f"{args.bin_prefix}/sifnoded add-genesis-validators {valoper} --home {sifnodedpath}",
+            shell=True,
+            check=True
+        )
+    print(f"validators: \n{json.dumps(validators)}")
+
+    # need a new account to be the administrator
+    adminusercmd = f"yes | {args.bin_prefix}/sifnodecli keys add sifnodeadmin --keyring-backend test -o json"
+    adminuseroutput = subprocess.run(
+        adminusercmd,
+        capture_output=True,
+        shell=True,
+        text=True,
+        check=True
+    )
+    adminuser = json.loads(adminuseroutput.stderr)
+    adminuseraddr = adminuser["address"]
+    subprocess.run(
+        f"{args.bin_prefix}/sifnoded add-genesis-account {adminuseraddr} 100000000000000000000rowan --home {sifnodedpath}",
+        check=True,
+        shell=True,
+    )
+    subprocess.run(
+        f"{args.bin_prefix}/sifnoded set-genesis-oracle-admin {adminuseraddr} --home {sifnodedpath}",
+        check=True,
+        shell=True,
+    )
+    # adminuser=$(yes | sifnodecli keys add sifnodeadmin --keyring-backend test -o json 2>&1 | jq -r .address)
+    # #{"name":"fnord","type":"local","address":"sif10ckfjtdmk9zkcs9fhl0h260xsj6kvg7esmyqrw","pubkey":"sifpub1addwnpepqtd7ysjyu9aynhemqe9sanmlest8y6dvg24aqzknfmp2ppp7cmxlkc7y8lz","mnemonic":"exact below syrup slender party witness already lamp inform dash impose ginger sauce shift tag humble awkward spawn blue flower lab census gold girl"}
+    # set_persistant_env_var SIFCHAIN_ADMIN_ACCOUNT $adminuser $envexportfile
+    # sifnoded add-genesis-account $adminuser 100000000000000000000rowan --home $CHAINDIR/.sifnoded
+    # sifnoded set-genesis-oracle-admin $adminuser --home $CHAINDIR/.sifnoded
+
+    return {
+        **fields,
+        "validators": validators,
+        "adminuser": adminuser,
+    }
 
 
-def fund_initial_accounts(addresses: List[str], starting_amount: int):
-    quote = '"'
-    print(f"addresses: {addresses}")
-    for addr in addresses:
-        quotedaddr = f"\\{quote}{addr}\\{quote}"
-        cmd = f'geth attach /tmp/gethdata/geth.ipc --exec "eth.sendTransaction({{from:eth.coinbase, to:{quotedaddr}, value:{starting_amount * 10 ** 18}}})"'
-        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for addr in addresses:
-        quotedaddr = f"\\{quote}{addr}\\{quote}"
-        while True:
-            cmd = f'geth attach /tmp/gethdata/geth.ipc --exec "eth.getBalance({quotedaddr})"'
-            balance_result = subprocess.run(
-                cmd,
-                check=True,
-                text=True,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=10,
-            )
-            print(f"getbal: {balance_result}")
-            balance = int(float(balance_result.stdout))
-            if balance >= starting_amount:
-                break;
-
-
-def geth_docker_compose(args: env_ethereum.EthereumInput):
-    base = env_utilities.base_docker_compose(gethname)
+def sifnoded_docker_compose(args: SifnodedRunner):
+    base = env_utilities.base_docker_compose(sifnodename)
     ports = [
-        f"{args.ws_port}:{args.ws_port}",
-        f"{args.http_port}:{args.http_port}",
+        f"{args.rpc_port}:{args.rpc_port}",
     ]
     network = "sifchaintest"
     return {
-        gethname: {
+        sifnodename: {
             **base,
             "ports": ports,
             "networks": [network],
-            "working_dir": "/sifnode/test/integration",
+            "command": env_utilities.docker_compose_command("startsifnoded"),
+            # "command": "sleep 60000"
         }
     }
 
 
-def format_new_accounts(accts):
-    result = {}
-    for a in accts:
-        public_address, private_key = a
-        result[public_address] = private_key
-    return {
-        "private_keys": result
-    }
-
-
-def start_geth(args: GethInput):
-    """returns an object with a wait() method"""
-    print("starting geth")
-    cmd = geth_cmd(args)
-    logfile = open(args.logfile, "w")
-    proc = subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=logfile,
-        stdin=None,
-        stderr=subprocess.STDOUT,
-    )
-    wait_for_port("localhost", args.ws_port)
-    wait_for_port("localhost", args.http_port)
-    new_accounts = create_initial_accounts(args.ethereum_addresses)
-    fund_initial_accounts(map(lambda a: a[0], new_accounts), args.starting_ether)
-    env_utilities.startup_complete(args, format_new_accounts(new_accounts))
-    return proc
-
-
-def create_account() -> (str, str):
-    """returns a pair of public_address, private_key"""
-    bad_password = "notasecret"
-    with tempfile.NamedTemporaryFile(mode="w", delete=False) as tf:
-        print(bad_password, file=tf, flush=True)
-        cmd = f"geth account new --password {tf.name}"
-        output = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            shell=True
-        )
-        s = output.stdout
-        lines = s.split("\n")
-        for l in lines:
-            if "Public address of the key: " in l:
-                _, public = l.split(": ")
-            if "Path of the secret key file: " in l:
-                _, keyfilepath = l.split(": ")
-        print(f"rslt: {output.stdout} | {output.stderr}")
-
-        cmd = f"web3 account extract --keyfile {keyfilepath} --password {bad_password}"
-        output = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            shell=True
-        )
-        print(f"outputis: {output}")
-        s = output.stdout
-        lines = s.split("\n")
-        for l in lines:
-            if "Private key: " in l:
-                _, private_key = l.split(": ")
-            if "Public address: " in l:
-                _, public_address = l.split(": ")
-        return public_address, private_key
+def run(args: SifnodedRunner, data):
+    """runs the first validator as the only validator - this needs improvement"""
+    p = args.rpc_port
+    for v in data["validators"]:
+        sndp = v["sifnodedpath"]
+        cmd = f"{args.bin_prefix}/sifnoded start --minimum-gas-prices 0.5rowan --rpc.laddr tcp://0.0.0.0:{p} --home {sndp}"
+        print(f"cmdis: {cmd}")
+        break
+    env_utilities.startup_complete(args, data)
+    subprocess.run(cmd, shell=True)
