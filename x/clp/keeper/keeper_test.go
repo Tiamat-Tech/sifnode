@@ -1,129 +1,214 @@
 package keeper_test
 
 import (
-	"github.com/Sifchain/sifnode/x/clp"
-	"github.com/Sifchain/sifnode/x/clp/test"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/supply"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	sifapp "github.com/Sifchain/sifnode/app"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/query"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/Sifchain/sifnode/x/clp/test"
+	"github.com/Sifchain/sifnode/x/clp/types"
+	tokenregistrytypes "github.com/Sifchain/sifnode/x/tokenregistry/types"
 )
 
 func TestKeeper_Errors(t *testing.T) {
 	pool := test.GenerateRandomPool(1)[0]
-	ctx, keeper := test.CreateTestAppClp(false)
-	_ = keeper.Logger(ctx)
+	ctx, app := test.CreateTestAppClp(false)
+	clpKeeper := app.ClpKeeper
+	num := clpKeeper.GetMinCreatePoolThreshold(ctx)
+	assert.Equal(t, num, uint64(100))
+	_ = clpKeeper.GetParams(ctx)
+	_ = clpKeeper.Logger(ctx)
 	pool.ExternalAsset.Symbol = ""
-	err := keeper.SetPool(ctx, pool)
-	assert.Error(t, err)
-	getpools := keeper.GetPools(ctx)
+	err := clpKeeper.SetPool(ctx, &pool)
+	assert.Error(t, err, "Unable to set pool")
+	boolean := clpKeeper.ValidatePool(pool)
+	assert.False(t, boolean)
+	getpools, _, err := clpKeeper.GetPoolsPaginated(ctx, &query.PageRequest{})
+	assert.NoError(t, err)
 	assert.Equal(t, len(getpools), 0, "No pool added")
-
 	lp := test.GenerateRandomLP(1)[0]
 	lp.Asset.Symbol = ""
-	keeper.SetLiquidityProvider(ctx, lp)
-	getlp, err := keeper.GetLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
+	clpKeeper.SetLiquidityProvider(ctx, &lp)
+	getlp, err := clpKeeper.GetLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress)
 	assert.Error(t, err)
 	assert.NotEqual(t, getlp, lp)
 	assert.NotNil(t, test.GenerateAddress("A58856F0FD53BF058B4909A21AEC019107BA7"))
 }
 
-func TestKeeper_SetPool(t *testing.T) {
-
-	pool := test.GenerateRandomPool(1)[0]
-	ctx, keeper := test.CreateTestAppClp(false)
-	err := keeper.SetPool(ctx, pool)
-	assert.NoError(t, err)
-	getpool, err := keeper.GetPool(ctx, pool.ExternalAsset.Symbol)
-	assert.NoError(t, err, "Error in get pool")
-	assert.Equal(t, getpool, pool)
-	assert.Equal(t, keeper.ExistsPool(ctx, pool.ExternalAsset.Symbol), true)
-}
-
-func TestKeeper_GetPools(t *testing.T) {
-	pools := test.GenerateRandomPool(10)
-	ctx, keeper := test.CreateTestAppClp(false)
-	for _, pool := range pools {
-		err := keeper.SetPool(ctx, pool)
-		assert.NoError(t, err)
-	}
-	getpools := keeper.GetPools(ctx)
-	assert.Greater(t, len(getpools), 0, "More than one pool added")
-	assert.LessOrEqual(t, len(getpools), len(pools), "Set pool will ignore duplicates")
-}
-
-func TestKeeper_DestroyPool(t *testing.T) {
-	pool := test.GenerateRandomPool(1)[0]
-	ctx, keeper := test.CreateTestAppClp(false)
-	err := keeper.SetPool(ctx, pool)
-	assert.NoError(t, err)
-	getpool, err := keeper.GetPool(ctx, pool.ExternalAsset.Symbol)
-	assert.NoError(t, err, "Error in get pool")
-	assert.Equal(t, getpool, pool)
-	err = keeper.DestroyPool(ctx, pool.ExternalAsset.Symbol)
-	assert.NoError(t, err)
-	_, err = keeper.GetPool(ctx, pool.ExternalAsset.Symbol)
-	assert.Error(t, err, "Pool should be deleted")
-	// This should do nothing.
-	err = keeper.DestroyPool(ctx, pool.ExternalAsset.Symbol)
-	assert.Error(t, err)
-}
-
-func TestKeeper_SetLiquidityProvider(t *testing.T) {
-	lp := test.GenerateRandomLP(1)[0]
-	ctx, keeper := test.CreateTestAppClp(false)
-	keeper.SetLiquidityProvider(ctx, lp)
-	getlp, err := keeper.GetLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
-	assert.NoError(t, err, "Error in get liquidityProvider")
-	assert.Equal(t, getlp, lp)
-	lpList := keeper.GetLiquidityProvidersForAsset(ctx, lp.Asset)
-	assert.Equal(t, lp, lpList[0])
-}
-
-func TestKeeper_DestroyLiquidityProvider(t *testing.T) {
-	lp := test.GenerateRandomLP(1)[0]
-	ctx, keeper := test.CreateTestAppClp(false)
-	keeper.SetLiquidityProvider(ctx, lp)
-	getlp, err := keeper.GetLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
-	assert.NoError(t, err, "Error in get liquidityProvider")
-	assert.Equal(t, getlp, lp)
-	assert.True(t, keeper.GetLiquidityProviderIterator(ctx).Valid())
-	keeper.DestroyLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
-	_, err = keeper.GetLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
-	assert.Error(t, err, "LiquidityProvider has been deleted")
-	// This should do nothing
-	keeper.DestroyLiquidityProvider(ctx, lp.Asset.Symbol, lp.LiquidityProviderAddress.String())
-	assert.False(t, keeper.GetLiquidityProviderIterator(ctx).Valid())
-}
-
 func TestKeeper_BankKeeper(t *testing.T) {
 	user1 := test.GenerateAddress("A58856F0FD53BF058B4909A21AEC019107BA6")
 	user2 := test.GenerateAddress("A58856F0FD53BF058B4909A21AEC019107BA7")
-	ctx, keeper := test.CreateTestAppClp(false)
+	ctx, app := test.CreateTestAppClp(false)
+	clpKeeper := app.ClpKeeper
 	initialBalance := sdk.NewUint(10000)
 	sendingBalance := sdk.NewUint(1000)
-	nativeCoin := sdk.NewCoin(clp.NativeSymbol, sdk.Int(initialBalance))
-	sendingCoin := sdk.NewCoin(clp.NativeSymbol, sdk.Int(sendingBalance))
-	_, err := keeper.GetBankKeeper().AddCoins(ctx, user1, sdk.Coins{nativeCoin})
+	nativeCoin := sdk.NewCoin(types.NativeSymbol, sdk.Int(initialBalance))
+	sendingCoin := sdk.NewCoin(types.NativeSymbol, sdk.Int(sendingBalance))
+	err := sifapp.AddCoinsToAccount(types.ModuleName, app.BankKeeper, ctx, user1, sdk.NewCoins(nativeCoin))
 	assert.NoError(t, err)
-	assert.True(t, keeper.HasCoins(ctx, user1, sdk.Coins{nativeCoin}))
-	assert.NoError(t, keeper.SendCoins(ctx, user1, user2, sdk.Coins{sendingCoin}))
-	assert.True(t, keeper.HasCoins(ctx, user2, sdk.Coins{sendingCoin}))
-}
-
-func TestKeeper_GetAssetsForLiquidityProvider(t *testing.T) {
-	ctx, keeper := test.CreateTestAppClp(false)
-	lpList := test.GenerateRandomLP(10)
-	for _, lp := range lpList {
-		keeper.SetLiquidityProvider(ctx, lp)
-	}
-	assetList := keeper.GetAssetsForLiquidityProvider(ctx, lpList[0].LiquidityProviderAddress)
-	assert.LessOrEqual(t, len(assetList), len(lpList))
+	assert.True(t, clpKeeper.HasBalance(ctx, user1, nativeCoin))
+	assert.NoError(t, clpKeeper.SendCoins(ctx, user1, user2, sdk.NewCoins(sendingCoin)))
+	assert.True(t, clpKeeper.HasBalance(ctx, user2, sendingCoin))
 }
 
 func TestKeeper_GetModuleAccount(t *testing.T) {
-	ctx, keeper := test.CreateTestAppClp(false)
-	moduleAccount := keeper.GetSupplyKeeper().GetModuleAccount(ctx, clp.ModuleName)
-	assert.Equal(t, moduleAccount.GetName(), clp.ModuleName)
-	assert.Equal(t, moduleAccount.GetPermissions(), []string{supply.Burner, supply.Minter})
+	ctx, app := test.CreateTestAppClp(false)
+	clpKeeper := app.ClpKeeper
+	moduleAccount := clpKeeper.GetAuthKeeper().GetModuleAccount(ctx, types.ModuleName)
+	assert.Equal(t, moduleAccount.GetName(), types.ModuleName)
+	assert.Equal(t, moduleAccount.GetPermissions(), []string{authtypes.Burner, authtypes.Minter})
+}
+
+func TestKeeper_Codec(t *testing.T) {
+	_, app := test.CreateTestAppClp(false)
+	clpKeeper := app.ClpKeeper
+	got := clpKeeper.Codec()
+	require.NotNil(t, got)
+}
+
+func TestKeeper_GetBankKeeper(t *testing.T) {
+	_, app := test.CreateTestAppClp(false)
+	clpKeeper := app.ClpKeeper
+	got := clpKeeper.GetBankKeeper()
+	require.NotNil(t, got)
+}
+
+func TestKeeper_GetNormalizationFactor(t *testing.T) {
+	testcases :=
+		[]struct {
+			name                string
+			decimals            int64
+			normalizationFactor sdk.Dec
+			adjustExternalToken bool
+			expPanic            bool
+			expPanicMsg         string
+		}{
+			{
+				name:        "big decimals number throws error",
+				decimals:    100000000,
+				expPanic:    true,
+				expPanicMsg: "Int overflow",
+			},
+			{
+				name:                "decimals less than 18",
+				decimals:            10,
+				normalizationFactor: sdk.NewDec(100000000),
+				adjustExternalToken: true,
+			},
+			{
+				name:                "decimals greater than or equal to 18",
+				decimals:            20,
+				normalizationFactor: sdk.NewDec(100),
+				adjustExternalToken: false,
+			},
+			{
+				name:                "with 6 decimals",
+				decimals:            6,
+				normalizationFactor: sdk.NewDec(1000000000000),
+				adjustExternalToken: true,
+			},
+		}
+
+	for _, tc := range testcases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, app := test.CreateTestAppClp(false)
+			clpKeeper := app.ClpKeeper
+
+			if tc.expPanic {
+				require.PanicsWithValue(t, tc.expPanicMsg, func() {
+					clpKeeper.GetNormalizationFactor(tc.decimals)
+				})
+			} else {
+				normalizationFactor, adjustExternalToken := clpKeeper.GetNormalizationFactor(tc.decimals)
+
+				require.NotNil(t, normalizationFactor)
+				require.Equal(t, tc.normalizationFactor, normalizationFactor)
+				require.Equal(t, tc.adjustExternalToken, adjustExternalToken)
+			}
+		})
+	}
+}
+
+func TestKeeper_GetNormalizationFactorFromAsset(t *testing.T) {
+	testcases :=
+		[]struct {
+			name                string
+			denom               string
+			expPanicMsg         string
+			asset               types.Asset
+			decimals            int64
+			normalizationFactor sdk.Dec
+			createToken         bool
+			adjustExternalToken bool
+			expPanic            bool
+		}{
+			{
+				name:        "big decimals number throws error",
+				asset:       types.Asset{Symbol: "xxx"},
+				createToken: true,
+				denom:       "xxx",
+				decimals:    100000000,
+				expPanic:    true,
+				expPanicMsg: "Int overflow",
+			},
+			{
+				name:                "unknown symbol",
+				createToken:         false,
+				asset:               types.Asset{Symbol: "xxx"},
+				adjustExternalToken: false,
+			},
+			{
+				name:                "decimals less than 18",
+				asset:               types.Asset{Symbol: "xxx"},
+				createToken:         true,
+				denom:               "xxx",
+				decimals:            10,
+				normalizationFactor: sdk.NewDec(100000000),
+				adjustExternalToken: true,
+			},
+			{
+				name:                "decimals greater than or equal to 18",
+				asset:               types.Asset{Symbol: "xxx"},
+				createToken:         true,
+				denom:               "xxx",
+				decimals:            20,
+				normalizationFactor: sdk.NewDec(100),
+				adjustExternalToken: false,
+			},
+		}
+
+	for _, tc := range testcases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, app := test.CreateTestAppClp(false)
+			clpKeeper := app.ClpKeeper
+
+			if tc.createToken {
+				app.TokenRegistryKeeper.SetToken(ctx, &tokenregistrytypes.RegistryEntry{
+					Denom:       tc.denom,
+					Decimals:    tc.decimals,
+					Permissions: []tokenregistrytypes.Permission{tokenregistrytypes.Permission_CLP},
+				})
+			}
+
+			if tc.expPanic {
+				require.PanicsWithValue(t, tc.expPanicMsg, func() {
+					clpKeeper.GetNormalizationFactorFromAsset(ctx, tc.asset)
+				})
+			} else {
+				normalizationFactor, adjustExternalToken := clpKeeper.GetNormalizationFactorFromAsset(ctx, tc.asset)
+
+				require.NotNil(t, normalizationFactor)
+				require.Equal(t, tc.normalizationFactor, normalizationFactor)
+				require.Equal(t, tc.adjustExternalToken, adjustExternalToken)
+			}
+		})
+	}
 }

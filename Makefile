@@ -1,48 +1,47 @@
-CHAINNET?=testnet # Options; localnet, testnet, chaosnet ,mainnet
+CHAINNET?=betanet
 BINARY?=sifnoded
+GOPATH?=$(shell go env GOPATH)
 GOBIN?=${GOPATH}/bin
 NOW=$(shell date +'%Y-%m-%d_%T')
 COMMIT:=$(shell git log -1 --format='%H')
 VERSION:=$(shell cat version)
+IMAGE_TAG?=latest
+HTTPS_GIT := https://github.com/sifchain/sifnode.git
+DOCKER ?= docker
+DOCKER_BUF := $(DOCKER) run --rm -v $(CURDIR):/workspace --workdir /workspace bufbuild/buf
 
-ifeq (mainnet,${CHAINNET})
-	BUILD_TAGS=mainnet
-else
-	BUILD_TAGS=testnet
+GOFLAGS:=""
+TAGS:=
+ifeq ($(FEATURE_TOGGLE_SDK_045), 1)
+	GOFLAGS := "-modfile=go_045.mod"
+	TAGS := FEATURE_TOGGLE_SDK_045
 endif
-
-whitespace :=
-whitespace += $(whitespace)
-comma := ,
-build_tags_comma_sep := $(subst $(whitespace),$(comma),$(BUILD_TAGS))
 
 ldflags = -X github.com/cosmos/cosmos-sdk/version.Name=sifchain \
 		  -X github.com/cosmos/cosmos-sdk/version.ServerName=sifnoded \
-		  -X github.com/cosmos/cosmos-sdk/version.ClientName=sifnodecli \
+		  -X github.com/cosmos/cosmos-sdk/version.ClientName=sifnoded \
 		  -X github.com/cosmos/cosmos-sdk/version.Version=$(VERSION) \
-		  -X github.com/cosmos/cosmos-sdk/version.Commit=$(COMMIT) \
-		  -X "github.com/cosmos/cosmos-sdk/version.BuildTags=$(build_tags_comma_sep)"
+		  -X github.com/cosmos/cosmos-sdk/version.Commit=$(COMMIT)
 
-BUILD_FLAGS := -ldflags '$(ldflags)' -tags ${BUILD_TAGS} -a
+BUILD_FLAGS := -ldflags '$(ldflags)' -tags '$(TAGS)'
 
-BINARIES=./cmd/sifnodecli ./cmd/sifnoded ./cmd/sifgen ./cmd/sifcrg ./cmd/ebrelayer
+BINARIES=./cmd/sifnoded ./cmd/sifgen ./cmd/ebrelayer
 
 all: lint install
 
 build-config:
 	echo $(CHAINNET)
-	echo $(BUILD_TAGS)
 	echo $(BUILD_FLAGS)
 
 init:
 	./scripts/init.sh
 
 start:
-	sifnodecli rest-server & sifnoded start
+	sifnoded start
 
 lint-pre:
 	@test -z $(gofmt -l .)
-	@go mod verify
+	@GOFLAGS=${GOFLAGS} go mod verify
 
 lint: lint-pre
 	@golangci-lint run
@@ -51,28 +50,28 @@ lint-verbose: lint-pre
 	@golangci-lint run -v --timeout=5m
 
 install: go.sum
-	go install ${BUILD_FLAGS} ${BINARIES}
+	GOFLAGS=${GOFLAGS} go install ${BUILD_FLAGS} ${BINARIES}
 
-clean-config:
-	@rm -rf ~/.sifnode*
+build-sifd: go.sum
+	GOFLAGS=${GOFLAGS} go build  ${BUILD_FLAGS} ./cmd/sifnoded
 
-clean: clean-config
+clean:
 	@rm -rf ${GOBIN}/sif*
 
 coverage:
-	@go test -v ./... -coverprofile=coverage.txt -covermode=atomic
+	@GOFLAGS=${GOFLAGS} go test -v ./... -coverprofile=coverage.txt -covermode=atomic
 
 tests:
-	@go test -v -coverprofile .testCoverage.txt ./...
+	@GOFLAGS=${GOFLAGS} go test -v -coverprofile .testCoverage.txt ./...
 
 feature-tests:
-	@go test -v ./test/bdd --godog.format=pretty --godog.random -race -coverprofile=.coverage.txt
+	@GOFLAGS=${GOFLAGS} go test -v ./test/bdd --godog.format=pretty --godog.random -race -coverprofile=.coverage.txt
 
 run:
-	go run ./cmd/sifnoded start
+	GOFLAGS=${GOFLAGS} go run ./cmd/sifnoded start
 
 build-image:
-	docker build -t sifchain/$(BINARY):$(IMAGE_TAG) --build-arg chainnet=$(CHAINNET) -f ./cmd/$(BINARY)/Dockerfile .
+	docker build -t sifchain/$(BINARY):$(IMAGE_TAG) -f ./cmd/$(BINARY)/Dockerfile .
 
 run-image: build-image
 	docker run sifchain/$(BINARY):$(IMAGE_TAG)
@@ -89,3 +88,41 @@ init-run-noInstall:
 rollback:
 	./scripts/rollback.sh
 
+###############################################################################
+###                                Protobuf                                 ###
+###############################################################################
+
+protoVer=v0.3
+protoImageName=tendermintdev/sdk-proto-gen:$(protoVer)
+
+proto-all: proto-format proto-lint proto-gen
+
+proto-gen:
+	@echo "Generating Protobuf files"
+	$(DOCKER) run --rm -v $(CURDIR):/workspace --workdir /workspace $(protoImageName) sh ./scripts/protocgen.sh
+.PHONY: proto-gen
+
+proto-format:
+	@echo "Formatting Protobuf files"
+	$(DOCKER) run --rm -v $(CURDIR):/workspace \
+	--workdir /workspace $(protoImageName) \
+	find ./ -not -path "./third_party/*" -name *.proto -exec clang-format -i {} \;
+.PHONY: proto-format
+
+# This generates the SDK's custom wrapper for google.protobuf.Any. It should only be run manually when needed
+proto-gen-any:
+	$(DOCKER) run --rm -v $(CURDIR):/workspace --workdir /workspace $(protoImageName) sh ./scripts/protocgen-any.sh
+.PHONY: proto-gen-any
+
+proto-swagger-gen:
+	@./scripts/protoc-swagger-gen.sh
+.PHONY: proto-swagger-gen
+
+proto-lint:
+	$(DOCKER_BUF) lint --error-format=json
+.PHONY: proto-lint
+
+proto-check-breaking:
+	# we should turn this back on after our first release
+	# $(DOCKER_BUF) breaking --against $(HTTPS_GIT)#branch=master
+.PHONY: proto-check-breaking

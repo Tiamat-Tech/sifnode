@@ -9,9 +9,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v2.3.0
+        uses: golangci/golangci-lint-action@v2.5.2
         with:
-          version: v1.31
+          version: v1.45.2
   test:
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +33,7 @@ jobs:
 
     - name: Test
       run: |
-        go test -v ./... -coverprofile=coverage.txt -covermode=atomic
+        go test -v ./... -coverprofile=coverage.txt -covermode=atomic -coverpkg $(go list ./... | grep -v test | tr "\n" ",")
         excludelist="$(find ./ -type f -name '*.go' | xargs grep -l 'DONTCOVER')"
         for filename in ${excludelist}; do
           filename=$(echo $filename | sed 's/^../github.com\/Sifchain\/sifnode/g')
@@ -42,9 +42,7 @@ jobs:
         done
 
     - name: Upload coverage report
-      uses: codecov/codecov-action@v1
+      uses: codecov/codecov-action@v3
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.txt
-        flags: server
         verbose: true

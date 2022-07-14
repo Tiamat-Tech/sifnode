@@ -1,8 +1,10 @@
 import copy
 import logging
 import os
+import threading
 
 import pytest
+import siftool_path
 
 import test_utilities
 from burn_lock_functions import decrease_log_level, force_log_level
@@ -94,12 +96,12 @@ def solidity_json_path(smart_contracts_dir):
 
 
 @pytest.fixture
-def sifnodecli_homedir(is_ropsten_testnet):
+def sifnoded_homedir(is_ropsten_testnet):
     if is_ropsten_testnet:
         base = test_utilities.get_required_env_var("HOME")
     else:
         base = test_utilities.get_required_env_var("CHAINDIR")
-    result = f"""{base}/.sifnodecli"""
+    result = f"""{base}/.sifnoded"""
     return result
 
 
@@ -130,7 +132,7 @@ def rowan_source_key(is_ropsten_testnet, rowan_source):
 
 
 @pytest.fixture
-def sifnodecli_node():
+def sifnoded_node():
     return test_utilities.get_optional_env_var("SIFNODE", None)
 
 
@@ -167,9 +169,9 @@ def ropsten_wait_time():
 
 
 @pytest.fixture
-def is_ropsten_testnet(sifnodecli_node):
+def is_ropsten_testnet(sifnoded_node):
     """if sifnode_clinode is set, we're talking to ropsten/sandpit"""
-    return sifnodecli_node
+    return sifnoded_node
 
 
 @pytest.fixture
@@ -178,15 +180,21 @@ def is_ganache(ethereum_network):
     return not ethereum_network
 
 
+# Deprecated: sifnoded accepts --gas-prices=0.5rowan along with --gas-adjustment=1.5 instead of a fixed fee.
+# Using those parameters is the best way to have the fees set robustly after the .42 upgrade.
+# See https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
 @pytest.fixture
 def sifchain_fees(sifchain_fees_int):
-    """returns a string suitable for passing to sifnodecli"""
+    """returns a string suitable for passing to sifnoded"""
     return f"{sifchain_fees_int}rowan"
 
 
+# Deprecated: sifnoded accepts --gas-prices=0.5rowan along with --gas-adjustment=1.5 instead of a fixed fee.
+# Using those parameters is the best way to have the fees set robustly after the .42 upgrade.
+# See https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
 @pytest.fixture
 def sifchain_fees_int():
-    return 200000
+    return 100000000000000000
 
 
 @pytest.fixture
@@ -251,7 +259,7 @@ def ensure_relayer_restart(integration_dir, smart_contracts_dir):
     logging.info("restart ebrelayer after advancing wait blocks - avoids any interaction with replaying blocks")
     original_log_level = decrease_log_level(new_level=logging.WARNING)
     test_utilities.advance_n_ethereum_blocks(test_utilities.n_wait_blocks + 1, smart_contracts_dir)
-    test_utilities.get_shell_output(f"{integration_dir}/sifchain_start_ebrelayer.sh")
+    test_utilities.start_ebrelayer()
     force_log_level(original_log_level)
 
 
@@ -261,7 +269,7 @@ def basic_transfer_request(
         bridgebank_address,
         bridgetoken_address,
         ethereum_network,
-        sifnodecli_node,
+        sifnoded_node,
         chain_id,
         sifchain_fees,
         solidity_json_path,
@@ -276,7 +284,7 @@ def basic_transfer_request(
         bridgebank_address=bridgebank_address,
         bridgetoken_address=bridgetoken_address,
         ethereum_network=ethereum_network,
-        sifnodecli_node=sifnodecli_node,
+        sifnoded_node=sifnoded_node,
         manual_block_advance=is_ganache,
         chain_id=chain_id,
         sifchain_fees=sifchain_fees,
@@ -286,7 +294,7 @@ def basic_transfer_request(
 
 @pytest.fixture(scope="function")
 def rowan_source_integrationtest_env_credentials(
-        sifnodecli_homedir,
+        sifnoded_homedir,
         validator_password,
         rowan_source_key,
         is_ganache,
@@ -297,10 +305,9 @@ def rowan_source_integrationtest_env_credentials(
     to transfer rowan from an account that already has rowan.
     """
     return test_utilities.SifchaincliCredentials(
-        keyring_backend="file" if is_ganache else "test",
+        keyring_backend="test",
         keyring_passphrase=validator_password,
-        from_key=rowan_source,
-        sifnodecli_homedir=sifnodecli_homedir
+        from_key=rowan_source
     )
 
 
@@ -340,3 +347,42 @@ def restore_default_rescue_location(
         transfer_request=basic_transfer_request,
         credentials=sifchain_admin_account_credentials
     )
+
+
+threadlocals = threading.local()
+
+@pytest.fixture
+def ctx_legacy(snapshot_name):
+    logging.debug("Before ctx()")
+    yield threadlocals.ctx
+    logging.debug("After ctx()")
+
+@pytest.fixture(scope="function")
+def with_snapshot(snapshot_name):
+    main = integration_test_context.main
+    cmd = main.Integrator()
+    project = cmd.project
+    project.cleanup_and_reset_state()
+    ctx = integration_test_context.IntegrationTestContext(snapshot_name)
+    logging.info("Started processes: {}".format(repr(ctx.processes)))
+    threadlocals.ctx = ctx
+    os.environ["VAGRANT_ENV_JSON"] = main.project_dir("test/integration/vagrantenv.json")  # TODO HACK
+    logging.debug("Before with_snapshot()")
+    yield
+    logging.debug("After with_snapshot()")
+    main.project.killall(ctx.processes)  # TODO Ensure this is called even in the case of exception
+    logging.info("Terminated processes: {}".format(repr(ctx.processes)))
+    del threadlocals.ctx
+
+@pytest.fixture(scope="function")
+def ctx(request):
+    # To pass the "snapshot_name" as a parameter with value "foo" from test, annotate the test function like this:
+    # @pytest.mark.snapshot_name("foo")
+    snapshot_name = request.node.get_closest_marker("snapshot_name")
+    if snapshot_name is not None:
+        snapshot_name = snapshot_name.args[0]
+        logging.debug("Context setup: snapshot_name={}".format(repr(snapshot_name)))
+    from siftool import test_utils
+    with test_utils.get_test_env_ctx() as ctx:
+        yield ctx
+        logging.debug("Test context cleanup")

@@ -6,11 +6,15 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 
+import yaml
+
 n_wait_blocks = 50  # number of blocks to wait for the relayer to act
 burn_gas_cost = 160000000000 * 393000  # see x/ethbridge/types/msgs.go for gas
 lock_gas_cost = 160000000000 * 393000
 highest_gas_cost = max(burn_gas_cost, lock_gas_cost)
 
+
+sifnoded_binary = "sifnoded"
 
 @dataclass
 class EthereumToSifchainTransferRequest:
@@ -23,7 +27,7 @@ class EthereumToSifchainTransferRequest:
     ethereum_network: str = ""  # mainnet, ropsten, http:// for localnet
     amount: int = 0
     ceth_amount: int = 0
-    sifchain_fees: str = ""
+    sifchain_fees: str = ""  # Deprecated, see https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
     smart_contracts_dir: str = ""
     ethereum_chain_id: str = "5777"
     chain_id: str = "localnet"  # cosmos chain id
@@ -31,7 +35,7 @@ class EthereumToSifchainTransferRequest:
     n_wait_blocks: int = n_wait_blocks
     bridgebank_address: str = ""
     bridgetoken_address: str = ""
-    sifnodecli_node: str = "tcp://localhost:26657"
+    sifnoded_node: str = "tcp://localhost:26657"
     solidity_json_path: str = ""
     # set to true if you want to fail if the balance changes before
     # the block waiting period has elapsed.  If you're runing
@@ -66,7 +70,7 @@ class SifchaincliCredentials:
     keyring_passphrase: str = None
     keyring_backend: str = "test"
     from_key: str = None
-    sifnodecli_homedir: str = None
+    sifnoded_homedir: str = None
 
     def printable_entries(self):
         return {**(self.__dict__), "keyring_passphrase": "** hidden **"}
@@ -93,15 +97,26 @@ def print_error_message(error_message):
     raise Exception(error_message)
 
 
-def get_required_env_var(name, why: str = "by the system"):
+def get_env_var(name):
     result = os.environ.get(name)
+    if result is None:
+        tmp = os.environ.get("VAGRANT_ENV_JSON")
+        if tmp:
+            import json
+            with open(tmp, "rt") as f:
+                env = json.loads(f.read())
+            result = env.get(name)
+    return result
+
+def get_required_env_var(name, why: str = "by the system"):
+    result = get_env_var(name)
     if not result:
         print_error_message(f"{name} env var is required {why}")
     return result
 
 
 def get_optional_env_var(name: str, default_value: str):
-    result = os.environ.get(name)
+    result = get_env_var(name)
     return result if result else default_value
 
 
@@ -110,7 +125,7 @@ cmdfile = open("/tmp/testcmds.txt", "w")
 
 def get_shell_output(command_line):
     cmdfile.write(command_line)
-    if "sifnodecli" in command_line and not "q auth account" in command_line:
+    if sifnoded_binary in command_line and not "q auth account" in command_line:
         time.sleep(2)
     logging.debug(f"execute shell command:\n{command_line}")
     sub = subprocess.run(command_line, shell=True, capture_output=True)
@@ -137,6 +152,18 @@ def get_shell_output_json(command_line):
         raise
 
 
+def get_shell_output_yaml(command_line):
+    output = get_shell_output(command_line)
+    if not output:
+        print_error_message(f"no result returned from {command_line}")
+    try:
+        result = yaml.safe_load(output)
+        return result
+    except:
+        logging.critical(f"failed to decode json.  cmd is: {command_line}, output is: {output}")
+        raise
+
+
 def run_yarn_command(command_line):
     output = get_shell_output(command_line)
     if not output:
@@ -151,9 +178,18 @@ def run_yarn_command(command_line):
         raise Exception(f"json error from command:\n{command_line}\noutput:\n{lines}\noriginal exception: {e}")
 
 
+def kill_ebrelayer():
+    return get_shell_output("pkill -9 ebrelayer || true")
+
+
+def start_ebrelayer():
+    integration_dir = get_required_env_var("TEST_INTEGRATION_DIR")
+    return get_shell_output(f"{integration_dir}/sifchain_start_ebrelayer.sh")
+
+
 # converts a key to a sif address.
 def get_user_account(user, network_password):
-    command_line = "yes " + network_password + " | sifnodecli keys show " + user + " -a"
+    command_line = "yes " + network_password + f" | {sifnoded_binary} keys show " + user + " -a"
     return get_shell_output(command_line)
 
 
@@ -200,6 +236,8 @@ def get_token_ethereum_address(
         token: str,
         whitelist
 ):
+    if token == "eth" or token == "ceth" or token == NULL_ADDRESS:
+        return NULL_ADDRESS
     for token_in_whitelist in whitelist:
         if token_in_whitelist["symbol"] == token:
             return token_in_whitelist["token"]
@@ -225,11 +263,11 @@ def mint_tokens(transfer_request: EthereumToSifchainTransferRequest, operator_ad
     return run_yarn_command(command_line)
 
 
-def get_sifchain_addr_balance(sifaddress, sifnodecli_node, denom):
-    node = f"--node {sifnodecli_node}" if sifnodecli_node else ""
-    command_line = f"sifnodecli q auth account {node} {sifaddress} -o json"
+def get_sifchain_addr_balance(sifaddress, sifnoded_node, denom):
+    node = f"--node {sifnoded_node}" if sifnoded_node else ""
+    command_line = f"{sifnoded_binary} query bank balances {node} {sifaddress} --output json --limit 100000000"
     json_str = get_shell_output_json(command_line)
-    coins = json_str["value"]["coins"]
+    coins = json_str["balances"]
     for coin in coins:
         if coin["denom"] == denom:
             return int(coin["amount"])
@@ -258,10 +296,10 @@ def wait_for_successful_command(command_line, max_seconds=80):
     )
 
 
-def get_transaction_result(tx_hash, sifnodecli_node, chain_id):
-    node = f"--node {sifnodecli_node}" if sifnodecli_node else ""
+def get_transaction_result(tx_hash, sifnoded_node, chain_id):
+    node = f"--node {sifnoded_node}" if sifnoded_node else ""
     chain_id_entry = f"--chain-id {chain_id}" if chain_id else ""
-    command_line = f"sifnodecli q tx {node} {tx_hash} {chain_id_entry} -o json"
+    command_line = f"{sifnoded_binary} q tx {node} {tx_hash} {chain_id_entry} --output json"
     json_str = wait_for_successful_command(command_line, max_seconds=30)
     return json_str
 
@@ -278,7 +316,7 @@ def wait_for_balance(balance_fn, target_balance, max_seconds=80, debug_prefix=""
         else:
             if time.time() >= done_at_time:
                 difference = target_balance - balance
-                errmsg = f"{debug_prefix} Failed to get target balance of {target_balance}, balance is {balance}, difference is {difference} ({float(difference) / 10 ** 18}), waited for {max_seconds} seconds"
+                errmsg = f"{debug_prefix} Failed to get target balance of {target_balance} with multiple attempts, balance is {balance}, difference is {difference} ({float(difference) / 10 ** 18}), waited for {max_seconds} seconds"
                 logging.critical(errmsg)
                 raise Exception(errmsg)
             else:
@@ -307,7 +345,7 @@ def wait_for_sifchain_addr_balance(
         symbol,
         target_balance,
         sifchaincli_node,
-        max_seconds=90,
+        max_seconds=30,
         debug_prefix=""
 ):
     normalized_symbol = normalize_symbol(symbol)
@@ -322,7 +360,7 @@ def wait_for_sifchain_addr_balance(
     )
 
 
-def detect_errors_in_sifnodecli_output(result):
+def detect_errors_in_sifnoded_output(result):
     result_lines = result.split("\n")
     for line in result_lines:
         line: str
@@ -338,12 +376,12 @@ def send_from_sifchain_to_sifchain_cmd(
     yes_entry = f"yes {credentials.keyring_passphrase} | " if credentials.keyring_passphrase else ""
     keyring_backend_entry = f"--keyring-backend {credentials.keyring_backend}" if credentials.keyring_backend else ""
     chain_id_entry = f"--chain-id {transfer_request.chain_id}" if transfer_request.chain_id else ""
-    node = f"--node {transfer_request.sifnodecli_node}" if transfer_request.sifnodecli_node else ""
-    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""
-    home_entry = f"--home {credentials.sifnodecli_homedir}" if credentials.sifnodecli_homedir else ""
+    node = f"--node {transfer_request.sifnoded_node}" if transfer_request.sifnoded_node else ""
+    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""  # Deprecated, see https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
+    home_entry = f"--home {credentials.sifnoded_homedir}" if credentials.sifnoded_homedir else ""
     cmd = " ".join([
         yes_entry,
-        "sifnodecli tx send",
+        f"{sifnoded_binary} tx bank send",
         transfer_request.sifchain_address,
         transfer_request.sifchain_destination_address,
         keyring_backend_entry,
@@ -364,9 +402,9 @@ def send_from_sifchain_to_sifchain(
 ):
     cmd = send_from_sifchain_to_sifchain_cmd(transfer_request, credentials)
     result = get_shell_output_json(cmd)
-    # detect_errors_in_sifnodecli_output(result)
+    # detect_errors_in_sifnoded_output(result)
     time.sleep(4)
-    # get_transaction_result(result["txhash"], transfer_request.sifnodecli_node, transfer_request.chain_id)
+    # get_transaction_result(result["txhash"], transfer_request.sifnoded_node, transfer_request.chain_id)
     return result
 
 
@@ -382,10 +420,10 @@ def send_from_sifchain_to_ethereum_cmd(
     assert transfer_request.amount > 0
     yes_entry = f"yes {credentials.keyring_passphrase} | " if credentials.keyring_passphrase else ""
     keyring_backend_entry = f"--keyring-backend {credentials.keyring_backend}" if credentials.keyring_backend else ""
-    node = f"--node {transfer_request.sifnodecli_node}" if transfer_request.sifnodecli_node else ""
-    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""
+    node = f"--node {transfer_request.sifnoded_node}" if transfer_request.sifnoded_node else ""
+    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""  # Deprecated, see https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
     direction = "lock" if transfer_request.sifchain_symbol == "rowan" else "burn"
-    home_entry = f"--home {credentials.sifnodecli_homedir}" if credentials.sifnodecli_homedir else ""
+    home_entry = f"--home {credentials.sifnoded_homedir}" if credentials.sifnoded_homedir else ""
     from_entry = f"--from {credentials.from_key} " if credentials.from_key else ""
     if not transfer_request.ceth_amount:
         if direction == "lock":
@@ -393,7 +431,7 @@ def send_from_sifchain_to_ethereum_cmd(
         else:
             ceth_charge = burn_gas_cost
     command_line = f"{yes_entry} " \
-                   f"sifnodecli tx ethbridge {direction} {node} " \
+                   f"{sifnoded_binary} tx ethbridge {direction} {node} " \
                    f"{transfer_request.sifchain_address} " \
                    f"{transfer_request.ethereum_address} " \
                    f"{int(transfer_request.amount):0} " \
@@ -413,7 +451,7 @@ def send_from_sifchain_to_ethereum(transfer_request: EthereumToSifchainTransferR
                                    credentials: SifchaincliCredentials):
     command_line = send_from_sifchain_to_ethereum_cmd(transfer_request, credentials)
     result = get_shell_output(command_line)
-    detect_errors_in_sifnodecli_output(result)
+    detect_errors_in_sifnoded_output(result)
     return result
 
 
@@ -664,7 +702,7 @@ def update_ceth_receiver_account(
         credentials: SifchaincliCredentials
 ):
     cmd = build_sifchain_command(
-        f"sifnodecli tx ethbridge update_ceth_receiver_account -y {admin_account} {receiver_account}",
+        f"{sifnoded_binary} tx ethbridge update_ceth_receiver_account -y {admin_account} {receiver_account}",
         transfer_request=transfer_request,
         credentials=credentials
     )
@@ -680,7 +718,7 @@ def rescue_ceth(
         credentials: SifchaincliCredentials
 ):
     cmd = build_sifchain_command(
-        f"sifnodecli tx ethbridge rescue_ceth -y {admin_account} {receiver_account} {amount:d}",
+        f"{sifnoded_binary} tx ethbridge rescue_ceth -y {admin_account} {receiver_account} {amount:d}",
         transfer_request=transfer_request,
         credentials=credentials
     )
@@ -695,10 +733,10 @@ def build_sifchain_command(
     yes_entry = f"yes {credentials.keyring_passphrase} | " if credentials.keyring_passphrase else ""
     keyring_backend_entry = f"--keyring-backend {credentials.keyring_backend}" if credentials.keyring_backend else ""
     chain_id_entry = f"--chain-id {transfer_request.chain_id}" if transfer_request.chain_id else ""
-    node_entry = f"--node {transfer_request.sifnodecli_node}" if transfer_request.sifnodecli_node else ""
-    home_entry = f"--home {credentials.sifnodecli_homedir}" if credentials.sifnodecli_homedir else ""
+    node_entry = f"--node {transfer_request.sifnoded_node}" if transfer_request.sifnoded_node else ""
+    home_entry = f"--home {credentials.sifnoded_homedir}" if credentials.sifnoded_homedir else ""
     from_entry = f"--from {credentials.from_key} " if credentials.from_key else ""
-    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""
+    sifchain_fees_entry = f"--fees {transfer_request.sifchain_fees}" if transfer_request.sifchain_fees else ""  # Deprecated, see https://github.com/Sifchain/sifnode/pull/1802#discussion_r697403408
     return " ".join([
         yes_entry,
         command_contents,

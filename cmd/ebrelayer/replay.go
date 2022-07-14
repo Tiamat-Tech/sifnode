@@ -1,49 +1,28 @@
 package main
 
 import (
-	"bufio"
+	"github.com/Sifchain/sifnode/cmd/ebrelayer/txs"
+	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/client/tx"
 	"log"
-	"net/url"
 	"strconv"
 	"strings"
 
-	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/relayer"
-	"github.com/Sifchain/sifnode/cmd/ebrelayer/txs"
 )
 
 // RunReplayEthereumCmd executes replayEthereumCmd
 func RunReplayEthereumCmd(cmd *cobra.Command, args []string) error {
-	// Load the validator's Ethereum private key from environment variables
-	privateKey, err := txs.LoadPrivateKey()
+	cliContext, err := client.GetClientTxContext(cmd)
+
 	if err != nil {
-		return errors.Errorf("invalid [ETHEREUM_PRIVATE_KEY] environment variable")
+		return err
 	}
-
-	// Parse flag --chain-id
-	chainID := viper.GetString(flags.FlagChainID)
-	if strings.TrimSpace(chainID) == "" {
-		return errors.Errorf("Must specify a 'chain-id'")
-	}
-
-	// Parse flag --rpc-url
-	rpcURL := viper.GetString(FlagRPCURL)
-	if rpcURL != "" {
-		_, err := url.Parse(rpcURL)
-		if rpcURL != "" && err != nil {
-			return errors.Wrapf(err, "invalid RPC URL: %v", rpcURL)
-		}
-	}
-
-	// if !relayer.IsWebsocketURL(args[0]) {
-	// 	return errors.Errorf("invalid [web3-provider]: %s", args[0])
-	// }
 
 	tendermintNode := args[0]
 	web3Provider := args[1]
@@ -57,7 +36,7 @@ func RunReplayEthereumCmd(cmd *cobra.Command, args []string) error {
 		return errors.Errorf("invalid [validator-moniker]: %s", args[2])
 	}
 	validatorMoniker := args[3]
-	mnemonic := args[4]
+	//mnemonic := args[4]
 
 	fromBlock, err := strconv.ParseInt(args[5], 10, 64)
 	if err != nil {
@@ -85,37 +64,22 @@ func RunReplayEthereumCmd(cmd *cobra.Command, args []string) error {
 	}
 	sugaredLogger := logger.Sugar()
 
-	// Initialize new Ethereum event listener
-	inBuf := bufio.NewReader(cmd.InOrStdin())
-
-	ethSub, err := relayer.NewEthereumSub(inBuf, tendermintNode, cdc, validatorMoniker, chainID, web3Provider,
-		contractAddress, privateKey, mnemonic, nil, sugaredLogger)
+	symbolTranslator, err := buildSymbolTranslator(cmd.Flags())
 	if err != nil {
 		return err
 	}
 
-	ethSub.Replay(fromBlock, toBlock, cosmosFromBlock, cosmosToBlock)
+	ethSub := relayer.NewEthereumSub(cliContext, tendermintNode, validatorMoniker, web3Provider,
+		contractAddress, nil, nil, sugaredLogger)
+
+	txFactory := tx.NewFactoryCLI(cliContext, cmd.Flags())
+	ethSub.Replay(txFactory, fromBlock, toBlock, cosmosFromBlock, cosmosToBlock, symbolTranslator)
 
 	return nil
 }
 
 // RunReplayCosmosCmd executes initRelayerCmd
 func RunReplayCosmosCmd(cmd *cobra.Command, args []string) error {
-	// Load the validator's Ethereum private key from environment variables
-	privateKey, err := txs.LoadPrivateKey()
-	if err != nil {
-		return errors.Errorf("invalid [ETHEREUM_PRIVATE_KEY] environment variable")
-	}
-
-	// Parse flag --rpc-url
-	rpcURL := viper.GetString(FlagRPCURL)
-	if rpcURL != "" {
-		_, err := url.Parse(rpcURL)
-		if rpcURL != "" && err != nil {
-			return errors.Wrapf(err, "invalid RPC URL: %v", rpcURL)
-		}
-	}
-
 	// Validate and parse arguments
 	if len(strings.Trim(args[0], "")) == 0 {
 		return errors.Errorf("invalid [tendermint-node]: %s", args[0])
@@ -158,25 +122,26 @@ func RunReplayCosmosCmd(cmd *cobra.Command, args []string) error {
 	}
 	sugaredLogger := logger.Sugar()
 
-	// Initialize new Cosmos event listener
-	cosmosSub := relayer.NewCosmosSub(tendermintNode, web3Provider, contractAddress, privateKey, nil, sugaredLogger)
+	symbolTranslator, err := buildSymbolTranslator(cmd.Flags())
+	if err != nil {
+		return err
+	}
 
-	cosmosSub.Replay(fromBlock, toBlock, ethFromBlock, ethToBlock)
+	key, err := txs.LoadPrivateKey()
+	if err != nil {
+		log.Fatalf("failed to load ETHEREUM_PRIVATE_KEY")
+	}
+
+	// Initialize new Cosmos event listener
+	cosmosSub := relayer.NewCosmosSub(tendermintNode, web3Provider, contractAddress, key, nil, sugaredLogger)
+
+	cosmosSub.Replay(symbolTranslator, fromBlock, toBlock, ethFromBlock, ethToBlock)
 
 	return nil
 }
 
 // RunListMissedCosmosEventCmd executes initRelayerCmd
 func RunListMissedCosmosEventCmd(cmd *cobra.Command, args []string) error {
-	// Parse flag --rpc-url
-	rpcURL := viper.GetString(FlagRPCURL)
-	if rpcURL != "" {
-		_, err := url.Parse(rpcURL)
-		if rpcURL != "" && err != nil {
-			return errors.Wrapf(err, "invalid RPC URL: %v", rpcURL)
-		}
-	}
-
 	// Validate and parse arguments
 	if len(strings.Trim(args[0], "")) == 0 {
 		return errors.Errorf("invalid [tendermint-node]: %s", args[0])
@@ -209,10 +174,15 @@ func RunListMissedCosmosEventCmd(cmd *cobra.Command, args []string) error {
 	}
 	sugaredLogger := logger.Sugar()
 
+	symbolTranslator, err := buildSymbolTranslator(cmd.Flags())
+	if err != nil {
+		return err
+	}
+
 	// Initialize new Cosmos event listener
 	listMissedCosmosEvent := relayer.NewListMissedCosmosEvent(tendermintNode, web3Provider, contractAddress, relayerEthereumAddress, days, sugaredLogger)
 
-	listMissedCosmosEvent.ListMissedCosmosEvent()
+	listMissedCosmosEvent.ListMissedCosmosEvent(symbolTranslator)
 
 	return nil
 }

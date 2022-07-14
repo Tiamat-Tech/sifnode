@@ -15,14 +15,11 @@ const (
 
 var (
 	NewKeeper           = keeper.NewKeeper
-	NewQuerier          = keeper.NewQuerier
-	RegisterCodec       = types.RegisterCodec
+	RegisterCodec       = types.RegisterLegacyAminoCodec
 	DefaultGenesisState = types.DefaultGenesisState
-	ModuleCdc           = types.ModuleCdc
 )
 
 type (
 	Keeper          = keeper.Keeper
 	GenesisState    = types.GenesisState
-	MsgDistribution = types.MsgDistribution
 )

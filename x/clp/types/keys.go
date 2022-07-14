@@ -2,6 +2,8 @@ package types
 
 import (
 	"fmt"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 const (
@@ -17,11 +19,10 @@ const (
 	// QuerierRoute to be used for querier msgs
 	QuerierRoute = ModuleName
 
-	NativeSymbol      = "rowan"
-	PoolThrehold      = "1000000000000000000"
-	PoolUnitsMinValue = "1000000000"
+	NativeSymbol = "rowan"
+	PoolThrehold = "1000000000000000000"
 
-	MaxSymbolLength = 10
+	MaxSymbolLength = 71
 	MaxWbasis       = 10000
 )
 
@@ -29,6 +30,11 @@ var (
 	PoolPrefix               = []byte{0x00} // key for storing Pools
 	LiquidityProviderPrefix  = []byte{0x01} // key for storing Liquidity Providers
 	WhiteListValidatorPrefix = []byte{0x02} // Key to store WhiteList , allowed to decommission pools
+	PmtpRateParamsPrefix     = []byte{0x03} // Key to store the Pmtp rate params
+	PmtpEpochPrefix          = []byte{0x04} // Key to store the Epoch
+	PmtpParamsPrefix         = []byte{0x05} // Key to store the Pmtp params
+	RewardParamPrefix        = []byte{0x06}
+	SymmetryThresholdPrefix  = []byte{0x07}
 )
 
 // Generates a key for storing a specific pool
@@ -47,19 +53,20 @@ func GetLiquidityProviderKey(externalTicker string, lp string) []byte {
 	return append(LiquidityProviderPrefix, key...)
 }
 
-func GetNormalizationMap() map[string]int64 {
-	m := make(map[string]int64)
-	m["cel"] = 4
-	m["ausdc"] = 6
-	m["usdt"] = 6
-	m["usdc"] = 6
-	m["cro"] = 8
-	m["cdai"] = 8
-	m["wbtc"] = 8
-	m["ceth"] = 8
-	m["renbtc"] = 8
-	m["cusdc"] = 8
-	m["husd"] = 8
-	m["ampl"] = 9
-	return m
+func GetDefaultRewardParams() *RewardParams {
+	return &RewardParams{
+		LiquidityRemovalLockPeriod:   12 * 60 * 24 * 7,
+		LiquidityRemovalCancelPeriod: 12 * 60 * 24 * 30,
+		RewardPeriods:                nil,
+		RewardPeriodStartTime:        "",
+	}
+}
+
+func GetDefaultPmtpParams() *PmtpParams {
+	return &PmtpParams{
+		PmtpPeriodGovernanceRate: sdk.MustNewDecFromStr("0.0"),
+		PmtpPeriodEpochLength:    1,
+		PmtpPeriodStartBlock:     0,
+		PmtpPeriodEndBlock:       0,
+	}
 }

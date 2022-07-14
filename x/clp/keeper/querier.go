@@ -9,117 +9,177 @@ import (
 )
 
 // NewQuerier is the module level router for state queries
-func NewQuerier(keeper Keeper) sdk.Querier {
-	return func(ctx sdk.Context, path []string, req abci.RequestQuery) (res []byte, err error) {
+func NewQuerier(keeper Keeper, legacyQuerierCdc *codec.LegacyAmino) sdk.Querier { //nolint
+	querier := Querier{keeper}
+	return func(ctx sdk.Context, path []string, req abci.RequestQuery) ([]byte, error) {
 		switch path[0] {
 		case types.QueryPool:
-			return queryPool(ctx, req, keeper)
+			return queryPool(ctx, path[1:], req, legacyQuerierCdc, querier)
 		case types.QueryPools:
-			return queryPools(ctx, keeper)
+			return queryPools(ctx, path[1:], req, legacyQuerierCdc, querier)
 		case types.QueryLiquidityProvider:
-			return queryLiquidityProvider(ctx, req, keeper)
+			return queryLiquidityProvider(ctx, path[1:], req, legacyQuerierCdc, querier)
+		case types.QueryLiquidityProviderData:
+			return queryLiquidityProviderData(ctx, path[1:], req, legacyQuerierCdc, querier)
 		case types.QueryAssetList:
-			return queryAssetList(ctx, req, keeper)
+			return queryAssetList(ctx, path[1:], req, legacyQuerierCdc, querier)
 		case types.QueryLPList:
-			return queryLPList(ctx, req, keeper)
+			return queryLPList(ctx, path[1:], req, legacyQuerierCdc, querier)
 		case types.QueryAllLP:
-			return queryAllLP(ctx, keeper)
+			return queryAllLP(ctx, path[1:], req, legacyQuerierCdc, querier)
+		case types.QueryParams:
+			return queryParams(ctx, path[1:], req, legacyQuerierCdc, querier)
+		case types.QueryRewardParams:
+			return queryRewardParams(ctx, path[1:], req, legacyQuerierCdc, querier)
+		case types.QueryPmtpParams:
+			return queryPmtpParams(ctx, path[1:], req, legacyQuerierCdc, querier)
 		default:
 			return nil, sdkerrors.Wrap(sdkerrors.ErrUnknownRequest, "unknown clp query endpoint")
 		}
 	}
 }
 
-func queryPool(ctx sdk.Context, req abci.RequestQuery, keeper Keeper) ([]byte, error) {
-	var params types.QueryReqGetPool
-
-	err := types.ModuleCdc.UnmarshalJSON(req.Data, &params)
+func queryPool(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	var params types.PoolReq
+	err := legacyQuerierCdc.UnmarshalJSON(req.Data, &params)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
 	}
-	pool, err := keeper.GetPool(ctx, params.Symbol)
+	res, err := querier.GetPool(sdk.WrapSDKContext(ctx), &params)
 	if err != nil {
 		return nil, err
 	}
-	height := ctx.BlockHeight()
-	poolResponse := types.NewPoolResponse(pool, height, types.GetCLPModuleAddress().String())
-	res, err := codec.MarshalJSONIndent(keeper.cdc, poolResponse)
+	bz, err := legacyQuerierCdc.MarshalJSON(&res)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
 	}
-	return res, nil
+	return bz, nil
 }
-func queryPools(ctx sdk.Context, keeper Keeper) ([]byte, error) {
-	poolList := keeper.GetPools(ctx)
-	if len(poolList) == 0 {
-		return nil, types.ErrPoolListIsEmpty
-	}
-	height := ctx.BlockHeight()
-	poolsResponse := types.NewPoolsResponse(poolList, height, types.GetCLPModuleAddress().String())
-	res, err := codec.MarshalJSONIndent(keeper.cdc, poolsResponse)
-	if err != nil {
-		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
-	}
-	return res, nil
-}
-func queryLiquidityProvider(ctx sdk.Context, req abci.RequestQuery, keeper Keeper) ([]byte, error) {
-	var params types.QueryReqLiquidityProvider
 
-	err := types.ModuleCdc.UnmarshalJSON(req.Data, &params)
-	if err != nil {
-		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
-	}
-	lp, err := keeper.GetLiquidityProvider(ctx, params.Symbol, params.LpAddress.String())
+func queryPools(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	res, err := querier.GetPools(sdk.WrapSDKContext(ctx), &types.PoolsReq{})
 	if err != nil {
 		return nil, err
 	}
-	pool, err := keeper.GetPool(ctx, params.Symbol)
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
+	}
+	return bz, nil
+}
+
+func queryLiquidityProvider(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	var params types.LiquidityProviderReq
+	err := legacyQuerierCdc.UnmarshalJSON(req.Data, &params)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
+	}
+	res, err := querier.GetLiquidityProvider(sdk.WrapSDKContext(ctx), &params)
 	if err != nil {
 		return nil, err
 	}
-	native, external, _, _ := CalculateAllAssetsForLP(pool, lp)
-	lpResponse := types.NewLiquidityProviderResponse(lp, ctx.BlockHeight(), native.String(), external.String())
-	res, err := codec.MarshalJSONIndent(keeper.cdc, lpResponse)
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
 	}
-	return res, nil
+	return bz, nil
 }
 
-func queryAssetList(ctx sdk.Context, req abci.RequestQuery, keeper Keeper) ([]byte, error) {
-	var params types.QueryReqGetAssetList
-	err := types.ModuleCdc.UnmarshalJSON(req.Data, &params)
+func queryLiquidityProviderData(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	var params types.LiquidityProviderDataReq
+	err := legacyQuerierCdc.UnmarshalJSON(req.Data, &params)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
 	}
-	assetList := keeper.GetAssetsForLiquidityProvider(ctx, params.LpAddress)
-	res, err := codec.MarshalJSONIndent(keeper.cdc, assetList)
+	res, err := querier.GetLiquidityProviderData(sdk.WrapSDKContext(ctx), &params)
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
 	}
-	return res, nil
+	return bz, nil
 }
 
-func queryLPList(ctx sdk.Context, req abci.RequestQuery, keeper Keeper) ([]byte, error) {
-	var params types.QueryReqGetLiquidityProviderList
-	err := types.ModuleCdc.UnmarshalJSON(req.Data, &params)
+func queryAssetList(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	var params types.AssetListReq
+	err := legacyQuerierCdc.UnmarshalJSON(req.Data, &params)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
 	}
-	searchingAsset := types.NewAsset(params.Symbol)
-	lpList := keeper.GetLiquidityProvidersForAsset(ctx, searchingAsset)
-	res, err := codec.MarshalJSONIndent(keeper.cdc, lpList)
+	res, err := querier.GetAssetList(sdk.WrapSDKContext(ctx), &params)
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res.Assets)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
 	}
-	return res, nil
+	return bz, nil
 }
 
-func queryAllLP(ctx sdk.Context, keeper Keeper) ([]byte, error) {
-	lpList := keeper.GetAllLiquidityProviders(ctx)
-	res, err := codec.MarshalJSONIndent(keeper.cdc, lpList)
+func queryLPList(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	var params types.LiquidityProviderListReq
+	err := legacyQuerierCdc.UnmarshalJSON(req.Data, &params)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONUnmarshal, err.Error())
+	}
+	res, err := querier.GetLiquidityProviderList(sdk.WrapSDKContext(ctx), &params)
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res.LiquidityProviders)
 	if err != nil {
 		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
 	}
-	return res, nil
+	return bz, nil
+}
+
+func queryAllLP(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	res, err := querier.GetLiquidityProviders(sdk.WrapSDKContext(ctx), &types.LiquidityProvidersReq{})
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res.LiquidityProviders)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
+	}
+	return bz, nil
+}
+
+func queryParams(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	res, err := querier.GetParams(sdk.WrapSDKContext(ctx), &types.ParamsReq{})
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
+	}
+	return bz, nil
+}
+
+func queryRewardParams(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	res, err := querier.GetRewardParams(sdk.WrapSDKContext(ctx), &types.RewardParamsReq{})
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
+	}
+	return bz, nil
+}
+
+func queryPmtpParams(ctx sdk.Context, path []string, req abci.RequestQuery, legacyQuerierCdc *codec.LegacyAmino, querier Querier) ([]byte, error) { //nolint
+	res, err := querier.GetPmtpParams(sdk.WrapSDKContext(ctx), &types.PmtpParamsReq{})
+	if err != nil {
+		return nil, err
+	}
+	bz, err := codec.MarshalJSONIndent(legacyQuerierCdc, res)
+	if err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrJSONMarshal, err.Error())
+	}
+	return bz, nil
 }

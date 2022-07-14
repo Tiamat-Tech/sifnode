@@ -1,43 +1,26 @@
 package types
 
 import (
-	"fmt"
+	"time"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"strings"
+	gogotypes "github.com/gogo/protobuf/types"
 )
 
 //This package is used to keep historical data. This will later be used to distribute rewards over different blocks through a gov proposal
 
-type ClaimStatus int64
-
-const Pending ClaimStatus = 1
-const Completed ClaimStatus = 2
-
-func (d ClaimStatus) String() string {
-	switch d {
-	case Pending:
-		return "Pending"
-	case Completed:
-		return "Completed"
-	default:
-		return "All"
+func NewDistributionRecord(status DistributionStatus, distributionType DistributionType, distributionName string, recipientAddress string, coins sdk.Coins, start int64, end int64, runner string) DistributionRecord {
+	return DistributionRecord{
+		DistributionStatus:          status,
+		AuthorizedRunner:            runner,
+		DistributionType:            distributionType,
+		DistributionName:            distributionName,
+		RecipientAddress:            recipientAddress,
+		Coins:                       coins,
+		DistributionStartHeight:     start,
+		DistributionCompletedHeight: end,
 	}
-}
 
-// DistributionRecord is created for every recipient for a distribution
-// TODO : Add ClaimStatus to the prefixed key for records
-type DistributionRecord struct {
-	ClaimStatus
-	DistributionName            string         `json:"distribution_name"`
-	RecipientAddress            sdk.AccAddress `json:"recipient_address"`
-	Coins                       sdk.Coins      `json:"coins"`
-	DistributionStartHeight     int64          `json:"distribution_start_height"`
-	DistributionCompletedHeight int64          `json:"distribution_completed_height"`
-}
-type DistributionRecords []DistributionRecord
-
-func NewDistributionRecord(distributionName string, recipientAddress sdk.AccAddress, coins sdk.Coins, start int64, end int64) DistributionRecord {
-	return DistributionRecord{DistributionName: distributionName, RecipientAddress: recipientAddress, Coins: coins, DistributionStartHeight: start, DistributionCompletedHeight: end}
 }
 
 func (dr DistributionRecord) Validate() bool {
@@ -53,42 +36,35 @@ func (dr DistributionRecord) Validate() bool {
 	return true
 }
 
-func (dr DistributionRecord) String() string {
-	return strings.TrimSpace(fmt.Sprintf(`DistributionName: %s
-	RecipientAddress: %s
-	Coins: %s
-    ClaimStatus :%s
-    DistributionStartHeight :%d 
-    DistributionCompletedHeight :%d `, dr.DistributionName, dr.RecipientAddress.String(), dr.Coins.String(), dr.ClaimStatus.String(), dr.DistributionStartHeight, dr.DistributionCompletedHeight))
-}
-
 func (dr DistributionRecord) Add(dr2 DistributionRecord) DistributionRecord {
 	dr.Coins = dr.Coins.Add(dr2.Coins...)
 	return dr
 }
 
-type DistributionType int64
-
-const Airdrop DistributionType = 1
-
-func (d DistributionType) String() string {
-	switch d {
-	case Airdrop:
-		return "Airdrop"
-	default:
-		return "Invalid"
+func (dr DistributionRecord) DoesTypeSupportClaim() bool {
+	if dr.DistributionType == DistributionType_DISTRIBUTION_TYPE_LIQUIDITY_MINING || dr.DistributionType == DistributionType_DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY {
+		return true
 	}
+	return false
 }
 
-// A Distribution object is created for every new distribution type
-type Distribution struct {
-	DistributionType DistributionType `json:"distribution_type"`
-	DistributionName string           `json:"distribution_name"`
+func NewUserClaim(userAddress string, userClaimType DistributionType, t time.Time) (UserClaim, error) {
+	tProto, err := gogotypes.TimestampProto(t)
+	if err != nil {
+		return UserClaim{}, err
+	}
+	return UserClaim{UserAddress: userAddress, UserClaimType: userClaimType, UserClaimTime: tProto}, nil
 }
-type Distributions []Distribution
 
-func NewDistribution(t DistributionType, name string) Distribution {
-	return Distribution{DistributionType: t, DistributionName: name}
+func (uc UserClaim) Validate() bool {
+	if len(uc.UserAddress) == 0 {
+		return false
+	}
+	return true
+}
+
+func NewDistribution(t DistributionType, name string, authorizedRunner string) Distribution {
+	return Distribution{DistributionType: t, DistributionName: name, Runner: authorizedRunner}
 }
 
 func (ar Distribution) Validate() bool {
@@ -97,7 +73,62 @@ func (ar Distribution) Validate() bool {
 	}
 	return true
 }
+func GetDistributionStatus(status string) (DistributionStatus, bool) {
+	switch status {
+	case "Completed":
+		return DistributionStatus_DISTRIBUTION_STATUS_COMPLETED, true
+	case "Pending":
+		return DistributionStatus_DISTRIBUTION_STATUS_PENDING, true
+	case "Failed":
+		return DistributionStatus_DISTRIBUTION_STATUS_FAILED, true
+	default:
+		return DistributionStatus_DISTRIBUTION_STATUS_UNSPECIFIED, false
+	}
+}
 
-func (ar Distribution) String() string {
-	return strings.TrimSpace(fmt.Sprintf(`DistributionName: %s DistributionType :%s`, ar.DistributionName, ar.DistributionType.String()))
+func GetClaimType(claimType string) (DistributionType, bool) {
+	switch claimType {
+	case "LiquidityMining":
+		return DistributionType_DISTRIBUTION_TYPE_LIQUIDITY_MINING, true
+	case "ValidatorSubsidy":
+		return DistributionType_DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY, true
+	default:
+		return DistributionType_DISTRIBUTION_TYPE_UNSPECIFIED, false
+	}
+}
+
+func GetDistributionTypeFromShortString(distributionType string) (DistributionType, bool) {
+	switch distributionType {
+	case "Airdrop":
+		return DistributionType_DISTRIBUTION_TYPE_AIRDROP, true
+	case "LiquidityMining":
+		return DistributionType_DISTRIBUTION_TYPE_LIQUIDITY_MINING, true
+	case "ValidatorSubsidy":
+		return DistributionType_DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY, true
+	default:
+		return DistributionType_DISTRIBUTION_TYPE_UNSPECIFIED, false
+	}
+}
+func IsValidDistributionType(distributionType string) (DistributionType, bool) {
+	switch distributionType {
+	case "DISTRIBUTION_TYPE_AIRDROP":
+		return DistributionType_DISTRIBUTION_TYPE_AIRDROP, true
+	case "DISTRIBUTION_TYPE_LIQUIDITY_MINING":
+		return DistributionType_DISTRIBUTION_TYPE_LIQUIDITY_MINING, true
+	case "DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY":
+		return DistributionType_DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY, true
+	default:
+		return DistributionType_DISTRIBUTION_TYPE_UNSPECIFIED, false
+	}
+}
+
+func IsValidClaimType(claimType string) (DistributionType, bool) {
+	switch claimType {
+	case "DISTRIBUTION_TYPE_LIQUIDITY_MINING":
+		return DistributionType_DISTRIBUTION_TYPE_LIQUIDITY_MINING, true
+	case "DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY":
+		return DistributionType_DISTRIBUTION_TYPE_VALIDATOR_SUBSIDY, true
+	default:
+		return 0, false
+	}
 }

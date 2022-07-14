@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Sifchain/sifnode/tools/sifgen"
 	"github.com/spf13/cobra"
@@ -17,6 +18,7 @@ func main() {
 	_networkCmd := networkCmd()
 	_networkCmd.PersistentFlags().String("bond-amount", "1000000000000000000000000rowan", "bond amount")
 	_networkCmd.PersistentFlags().String("mint-amount", "999000000000000000000000000rowan", "mint amount")
+	_networkCmd.PersistentFlags().String("keyring-backend", "file", "keyring backend (os|file|kwallet|pass|test|memory)")
 	_networkCmd.AddCommand(networkCreateCmd(), networkResetCmd())
 
 	_nodeCmd := nodeCmd()
@@ -24,22 +26,23 @@ func main() {
 	_nodeCreateCmd.PersistentFlags().Bool("standalone", false, "standalone node")
 	_nodeCreateCmd.PersistentFlags().String("admin-clp-addresses", "", "admin clp addresses")
 	_nodeCreateCmd.PersistentFlags().String("admin-oracle-address", "", "admin oracle addresses")
+	_nodeCreateCmd.PersistentFlags().String("admin-token-registry-address", "", "admin token registry address")
 	_nodeCreateCmd.PersistentFlags().String("bind-ip-address", "127.0.0.1", "IPv4 address to bind the node to")
 	_nodeCreateCmd.PersistentFlags().String("peer-address", "", "peer node to connect to")
 	_nodeCreateCmd.PersistentFlags().String("genesis-url", "", "genesis URL")
 	_nodeCreateCmd.PersistentFlags().String("bond-amount", "1000000000000000000000000rowan", "bond amount")
 	_nodeCreateCmd.PersistentFlags().String("mint-amount", "999000000000000000000000000rowan", "mint amount")
-	_nodeCreateCmd.PersistentFlags().String("faucet-amount", "1000000000000000000000000rowan", "faucet amount")
-	_nodeCreateCmd.PersistentFlags().String("min-clp-create-pool-threshold", "100", "minimum CLP create pool threshold")
-	_nodeCreateCmd.PersistentFlags().String("gov-max-deposit-period", "900000000000", "governance max deposit period")
-	_nodeCreateCmd.PersistentFlags().String("gov-voting-period", "900000000000", "governance voting period")
+	_nodeCreateCmd.PersistentFlags().Uint64("min-clp-create-pool-threshold", 100, "minimum CLP create pool threshold")
+	_nodeCreateCmd.PersistentFlags().Duration("gov-max-deposit-period", time.Duration(900000000000), "governance max deposit period")
+	_nodeCreateCmd.PersistentFlags().Duration("gov-voting-period", time.Duration(900000000000), "governance voting period")
 	_nodeCreateCmd.PersistentFlags().String("clp-config-url", "", "URL of the JSON file to use to pre-populate CLPs during genesis")
 	_nodeCreateCmd.PersistentFlags().Bool("print-details", false, "print the node details")
 	_nodeCreateCmd.PersistentFlags().Bool("with-cosmovisor", false, "setup cosmovisor")
+	_nodeCreateCmd.PersistentFlags().String("keyring-backend", "test", "keyring backend (os|file|kwallet|pass|test|memory)")
 	_nodeCmd.AddCommand(_nodeCreateCmd, nodeResetStateCmd())
 
 	_keyCmd := keyCmd()
-	_keyCmd.AddCommand(keyGenerateMnemonicCmd(), keyGenerateMnemonicCmd(), keyRecoverFromMnemonicCmd())
+	_keyCmd.AddCommand(keyGenerateMnemonicCmd(), keyRecoverFromMnemonicCmd())
 
 	rootCmd.AddCommand(_networkCmd, _nodeCmd, _keyCmd)
 	_ = rootCmd.Execute()
@@ -61,9 +64,10 @@ func networkCreateCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			bondAmount, _ := cmd.Flags().GetString("bond-amount")
 			mintAmount, _ := cmd.Flags().GetString("mint-amount")
+			keyringBackend, _ := cmd.Flags().GetString("keyring-backend")
 
 			count, _ := strconv.Atoi(args[1])
-			network := sifgen.NewSifgen(&args[0]).NewNetwork()
+			network := sifgen.NewSifgen(&args[0]).NewNetwork(keyringBackend)
 			network.BondAmount = bondAmount
 			network.MintAmount = mintAmount
 
@@ -107,34 +111,35 @@ func nodeCreateCmd() *cobra.Command {
 			standalone, _ := cmd.Flags().GetBool("standalone")
 			adminCLPAddresses, _ := cmd.Flags().GetString("admin-clp-addresses")
 			adminOracleAddress, _ := cmd.Flags().GetString("admin-oracle-address")
+			adminTokenRegistryAddress, _ := cmd.Flags().GetString("admin-token-registry-address")
 			bindIPAddress, _ := cmd.Flags().GetString("bind-ip-address")
 			peerAddress, _ := cmd.Flags().GetString("peer-address")
 			genesisURL, _ := cmd.Flags().GetString("genesis-url")
 			bondAmount, _ := cmd.Flags().GetString("bond-amount")
 			mintAmount, _ := cmd.Flags().GetString("mint-amount")
-			faucetAmount, _ := cmd.Flags().GetString("faucet-amount")
-			minCLPCreatePoolThreshold, _ := cmd.Flags().GetString("min-clp-create-pool-threshold")
-			govMaxDepositPeriod, _ := cmd.Flags().GetString("gov-max-deposit-period")
-			govVotingPeriod, _ := cmd.Flags().GetString("gov-voting-period")
-			clpConfigURL, _ := cmd.Flags().GetString("clp-config-url")
+			minCLPCreatePoolThreshold, _ := cmd.Flags().GetUint64("min-clp-create-pool-threshold")
+			govMaxDepositPeriod, _ := cmd.Flags().GetDuration("gov-max-deposit-period")
+			govVotingPeriod, _ := cmd.Flags().GetDuration("gov-voting-period")
 			printDetails, _ := cmd.Flags().GetBool("print-details")
 			withCosmovisor, _ := cmd.Flags().GetBool("with-cosmovisor")
+			keyringBackend, _ := cmd.Flags().GetString("keyring-backend")
 
-			node := sifgen.NewSifgen(&args[0]).NewNode()
+			node := sifgen.NewSifgen(&args[0]).NewNode(keyringBackend)
 			node.Moniker = args[1]
 			node.Mnemonic = args[2]
 
 			if standalone {
 				node.Standalone = true
-				node.AdminCLPAddresses = strings.Split(adminCLPAddresses, "|")
+				if len(adminCLPAddresses) > 0 {
+					node.AdminCLPAddresses = strings.Split(adminCLPAddresses, "|")
+				}
 				node.AdminOracleAddress = adminOracleAddress
+				node.AdminTokenRegistryAddress = adminTokenRegistryAddress
 				node.BondAmount = bondAmount
 				node.MintAmount = mintAmount
-				node.FaucetAmount = faucetAmount
 				node.MinCLPCreatePoolThreshold = minCLPCreatePoolThreshold
 				node.GovMaxDepositPeriod = govMaxDepositPeriod
 				node.GovVotingPeriod = govVotingPeriod
-				node.CLPConfigURL = clpConfigURL
 			} else {
 				node.PeerAddress = peerAddress
 				node.GenesisURL = genesisURL
@@ -147,7 +152,7 @@ func nodeCreateCmd() *cobra.Command {
 				log.Fatal(err)
 			}
 
-			if printDetails {
+			if printDetails && summary != nil {
 				fmt.Println(*summary)
 			}
 		},
@@ -183,7 +188,7 @@ func keyGenerateMnemonicCmd() *cobra.Command {
 		Short: "Generate a mnemonic phrase.",
 		Args:  cobra.MaximumNArgs(0),
 		Run: func(cmd *cobra.Command, args []string) {
-			sifgen.NewSifgen(nil).KeyGenerateMnemonic(nil, nil)
+			sifgen.NewSifgen(nil).KeyGenerateMnemonic("", "")
 		},
 	}
 }

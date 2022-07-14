@@ -6,6 +6,7 @@ const CosmosBridge = artifacts.require("CosmosBridge");
 const Oracle = artifacts.require("Oracle");
 const BridgeBank = artifacts.require("BridgeBank");
 const BridgeRegistry = artifacts.require("BridgeRegistry");
+const Blocklist = artifacts.require("Blocklist");
 const eRowan = artifacts.require("BridgeToken");
 
 module.exports = function(deployer, network, accounts) {
@@ -68,10 +69,15 @@ module.exports = function(deployer, network, accounts) {
         owner,
         pauser
       ],
-      setTxSpecifications(6721975, accounts[0], deployer)
+      setTxSpecifications(3000000, accounts[0], deployer)
     );
 
-    console.log("bridgeBank address: ", bridgeBank.address)
+    console.log("bridgeBank address: ", bridgeBank.address);
+
+    const blockList = await deployer.deploy(Blocklist);
+    console.log("blockList address: ", blockList.address);
+
+    bridgeBank.setBlocklist(blockList.address, setTxSpecifications(3000000, operator));
 
     return;
   });

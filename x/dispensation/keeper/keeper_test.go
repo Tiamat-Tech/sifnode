@@ -1,56 +1,71 @@
 package keeper_test
 
 import (
+	"testing"
+
+	"github.com/Sifchain/sifnode/x/dispensation/keeper"
 	"github.com/Sifchain/sifnode/x/dispensation/test"
 	"github.com/Sifchain/sifnode/x/dispensation/types"
-	"github.com/google/uuid"
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	paramtypes "github.com/cosmos/cosmos-sdk/x/params/types"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
-func TestKeeper_GetDistributions(t *testing.T) {
+func TestKeeper_Logger(t *testing.T) {
 	app, ctx := test.CreateTestApp(false)
-	keeper := app.DispensationKeeper
-	for i := 0; i < 10; i++ {
-		name := uuid.New().String()
-		distribution := types.NewDistribution(types.Airdrop, name)
-		err := keeper.SetDistribution(ctx, distribution)
-		assert.NoError(t, err)
-		_, err = keeper.GetDistribution(ctx, name, types.Airdrop)
-		assert.NoError(t, err)
-	}
-	list := keeper.GetDistributions(ctx)
-	assert.Len(t, list, 10)
+
+	key := sdk.NewKVStoreKey("rowan")
+	cdc := codec.BinaryCodec(app.AppCodec())
+	accountKeeper := types.AccountKeeper(app.AccountKeeper)
+	bankkeeper := types.BankKeeper(app.BankKeeper)
+	ps := paramtypes.Subspace{}
+	result := keeper.NewKeeper(cdc, key, bankkeeper, accountKeeper, ps)
+	res := result.Logger(ctx)
+	assert.Equal(t, res, result.Logger(ctx))
+
 }
 
-func TestKeeper_GetRecordsForName(t *testing.T) {
+func TestKeeper_Codec(t *testing.T) {
 	app, ctx := test.CreateTestApp(false)
-	keeper := app.DispensationKeeper
-	outList := test.GenerateOutputList("1000000000")
-	name := uuid.New().String()
-	for _, rec := range outList {
-		record := types.NewDistributionRecord(name, rec.Address, rec.Coins, ctx.BlockHeight(), -1)
-		err := keeper.SetDistributionRecord(ctx, record)
-		assert.NoError(t, err)
-		_, err = keeper.GetDistributionRecord(ctx, name, rec.Address.String())
-		assert.NoError(t, err)
-	}
-	list := keeper.GetRecordsForNameAll(ctx, name)
-	assert.Len(t, list, 3)
+	t.Log(ctx)
+	key := sdk.NewKVStoreKey("rowan")
+	cdc := codec.BinaryCodec(app.AppCodec())
+	accountKeeper := types.AccountKeeper(app.AccountKeeper)
+	bankkeeper := types.BankKeeper(app.BankKeeper)
+	ps := paramtypes.Subspace{}
+	result := keeper.NewKeeper(cdc, key, bankkeeper, accountKeeper, ps)
+
+	res := result.Codec()
+	assert.Equal(t, res, result.Codec())
 }
 
-func TestKeeper_GetRecordsForRecipient(t *testing.T) {
+func TestKeeper_GetAccountKeeper(t *testing.T) {
 	app, ctx := test.CreateTestApp(false)
-	keeper := app.DispensationKeeper
-	outList := test.GenerateOutputList("1000000000")
-	name := uuid.New().String()
-	for _, rec := range outList {
-		record := types.NewDistributionRecord(name, rec.Address, rec.Coins, ctx.BlockHeight(), -1)
-		err := keeper.SetDistributionRecord(ctx, record)
-		assert.NoError(t, err)
-		_, err = keeper.GetDistributionRecord(ctx, name, rec.Address.String())
-		assert.NoError(t, err)
-	}
-	list := keeper.GetRecordsForRecipient(ctx, outList[0].Address)
-	assert.Len(t, list, 1)
+	t.Log(ctx)
+	key := sdk.NewKVStoreKey("rowan")
+	cdc := codec.BinaryCodec(app.AppCodec())
+	accountKeeper := types.AccountKeeper(app.AccountKeeper)
+	bankkeeper := types.BankKeeper(app.BankKeeper)
+	ps := paramtypes.Subspace{}
+	result := keeper.NewKeeper(cdc, key, bankkeeper, accountKeeper, ps)
+
+	res := result.GetAccountKeeper()
+	t.Log(res)
+
+}
+
+func TestKeeper_HasCoin(t *testing.T) {
+	app, ctx := test.CreateTestApp(false)
+	t.Log(ctx)
+	key := sdk.NewKVStoreKey("rowan")
+	cdc := codec.BinaryCodec(app.AppCodec())
+	accountKeeper := types.AccountKeeper(app.AccountKeeper)
+	bankkeeper := types.BankKeeper(app.BankKeeper)
+	ps := paramtypes.Subspace{}
+	result := keeper.NewKeeper(cdc, key, bankkeeper, accountKeeper, ps)
+	user := sdk.AccAddress("addr1_____")
+	res := result.HasCoins(ctx, user, sdk.NewCoins(sdk.NewCoin("rowan", sdk.NewInt(1000000))))
+	t.Log(res)
+
 }

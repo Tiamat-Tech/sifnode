@@ -3,6 +3,7 @@ const CosmosBridge = artifacts.require("CosmosBridge");
 const Oracle = artifacts.require("Oracle");
 const BridgeBank = artifacts.require("BridgeBank");
 const BridgeToken = artifacts.require("BridgeToken");
+const Blocklist = artifacts.require("Blocklist");
 
 const BigNumber = web3.BigNumber;
 
@@ -66,6 +67,10 @@ contract("Gas Cost Test", function (accounts) {
       {unsafeAllowCustomTypes: true}
       );
 
+      // Deploy the Blocklist and set it in BridgeBank
+      this.blocklist = await Blocklist.new();
+      await this.bridgeBank.setBlocklist(this.blocklist.address);
+
       // Operator sets Bridge Bank
       await this.cosmosBridge.setBridgeBank(this.bridgeBank.address, {
         from: operator
@@ -76,11 +81,6 @@ contract("Gas Cost Test", function (accounts) {
       );
 
       this.weiAmount = web3.utils.toWei("0.25", "ether");
-
-      // Update the lock/burn limit for this token
-      await this.bridgeBank.updateTokenLockBurnLimit(this.tokenAddress, this.weiAmount, {
-        from: operator
-      }).should.be.fulfilled;
 
       await this.bridgeBank.lock(
         this.recipient,
@@ -242,6 +242,10 @@ contract("Gas Cost Test", function (accounts) {
       {unsafeAllowCustomTypes: true}
       );
 
+      // Deploy the Blocklist and set it in BridgeBank
+      this.blocklist = await Blocklist.new();
+      await this.bridgeBank.setBlocklist(this.blocklist.address);
+
       // Operator sets Bridge Bank
       await this.cosmosBridge.setBridgeBank(this.bridgeBank.address, {
         from: operator
@@ -253,16 +257,8 @@ contract("Gas Cost Test", function (accounts) {
 
       this.weiAmount = web3.utils.toWei("0.25", "ether");
 
-      // Update the lock/burn limit for this token
-      await this.bridgeBank.updateTokenLockBurnLimit(this.tokenAddress, this.weiAmount, {
-        from: operator
-      }).should.be.fulfilled;
-
       await this.bridgeBank.addExistingBridgeToken(this.token.address, { from: operator });
   
-      // allow 10 eth to be sent at once
-      await this.bridgeBank.updateTokenLockBurnLimit(this.token.address, '10000000000000000000', {from: operator });
-
       await this.token.addMinter(this.bridgeBank.address, { from: operator });    
     });
 
@@ -274,7 +270,7 @@ contract("Gas Cost Test", function (accounts) {
         this.cosmosSender,
         this.cosmosSenderSequence,
         this.ethereumReceiver,
-        this.passSymbol,
+        this.symbol,
         this.amount,
         {
             from: userOne
@@ -287,7 +283,7 @@ contract("Gas Cost Test", function (accounts) {
       this.cosmosSender,
       this.cosmosSenderSequence,
       this.ethereumReceiver,
-      this.passSymbol,
+      this.symbol,
       this.amount,
       {
         from: userOne,
@@ -309,7 +305,7 @@ contract("Gas Cost Test", function (accounts) {
       this.cosmosSender,
       this.cosmosSenderSequence,
       this.ethereumReceiver,
-      this.passSymbol,
+      this.symbol,
       this.amount,
       {
         from: userTwo,
@@ -324,7 +320,7 @@ contract("Gas Cost Test", function (accounts) {
       this.cosmosSender,
       this.cosmosSenderSequence,
       this.ethereumReceiver,
-      this.passSymbol,
+      this.symbol,
       this.amount,
       {
         from: userThree,

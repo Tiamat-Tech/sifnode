@@ -18,9 +18,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Sifchain/sifnode/cmd/ebrelayer/internal/symbol_translator"
+
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/contract"
+	cosmosbridge "github.com/Sifchain/sifnode/cmd/ebrelayer/contract/generated/bindings/cosmosbridge"
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/txs"
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/types"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -49,19 +53,21 @@ type CosmosSub struct {
 
 // NewCosmosSub initializes a new CosmosSub
 func NewCosmosSub(tmProvider, ethProvider string, registryContractAddress common.Address,
-	privateKey *ecdsa.PrivateKey, db *leveldb.DB, sugaredLogger *zap.SugaredLogger) CosmosSub {
+	key *ecdsa.PrivateKey,
+	db *leveldb.DB, sugaredLogger *zap.SugaredLogger) CosmosSub {
+
 	return CosmosSub{
 		TmProvider:              tmProvider,
 		EthProvider:             ethProvider,
 		RegistryContractAddress: registryContractAddress,
-		PrivateKey:              privateKey,
+		PrivateKey:              key,
 		DB:                      db,
 		SugaredLogger:           sugaredLogger,
 	}
 }
 
 // Start a Cosmos chain subscription
-func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
+func (sub CosmosSub) Start(completionEvent *sync.WaitGroup, symbolTranslator *symbol_translator.SymbolTranslator) {
 	defer completionEvent.Done()
 	time.Sleep(time.Second)
 	client, err := tmClient.New(sub.TmProvider, "/websocket")
@@ -69,7 +75,7 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 		sub.SugaredLogger.Errorw("failed to initialize a sifchain client.",
 			errorMessageKey, err.Error())
 		completionEvent.Add(1)
-		go sub.Start(completionEvent)
+		go sub.Start(completionEvent, symbolTranslator)
 		return
 	}
 
@@ -77,7 +83,7 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 		sub.SugaredLogger.Errorw("failed to start a sifchain client.",
 			errorMessageKey, err.Error())
 		completionEvent.Add(1)
-		go sub.Start(completionEvent)
+		go sub.Start(completionEvent, symbolTranslator)
 		return
 	}
 
@@ -91,7 +97,7 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 			errorMessageKey, err.Error(),
 			"query", query)
 		completionEvent.Add(1)
-		go sub.Start(completionEvent)
+		go sub.Start(completionEvent, symbolTranslator)
 		return
 	}
 
@@ -134,7 +140,7 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 			if lastProcessedBlock == 0 {
 				lastProcessedBlock = blockHeight
 			}
-			sub.SugaredLogger.Infow("new transaction witnessed in sifchain client.")
+			sub.SugaredLogger.Infow("new sifchain block witnessed")
 
 			startBlockHeight := lastProcessedBlock + 1
 			sub.SugaredLogger.Infow("cosmos process events for blocks.",
@@ -142,7 +148,9 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 
 			for blockNumber := startBlockHeight; blockNumber <= blockHeight; {
 				tmpBlockNumber := blockNumber
-				block, err := client.BlockResults(&tmpBlockNumber)
+
+				ctx := context.Background()
+				block, err := client.BlockResults(ctx, &tmpBlockNumber)
 
 				if err != nil {
 					sub.SugaredLogger.Errorw("sifchain client failed to get a block.",
@@ -150,19 +158,27 @@ func (sub CosmosSub) Start(completionEvent *sync.WaitGroup) {
 					continue
 				}
 
-				for _, log := range block.TxsResults {
-					for _, event := range log.Events {
+				for _, txLog := range block.TxsResults {
+					for _, event := range txLog.Events {
 
 						claimType := getOracleClaimType(event.GetType())
 
+						sub.SugaredLogger.Infow("claimtype cosmos.go: ", "claimType: ", claimType)
+
 						switch claimType {
 						case types.MsgBurn, types.MsgLock:
-							cosmosMsg, err := txs.BurnLockEventToCosmosMsg(claimType, event.GetAttributes(), sub.SugaredLogger)
+							cosmosMsg, err := txs.BurnLockEventToCosmosMsg(claimType, event.GetAttributes(), symbolTranslator, sub.SugaredLogger)
 							if err != nil {
 								sub.SugaredLogger.Errorw("sifchain client failed in get message from event.",
 									errorMessageKey, err.Error())
 								continue
 							}
+
+							sub.SugaredLogger.Infow(
+								"Received message from sifchain: ",
+								"msg", cosmosMsg,
+							)
+
 							sub.handleBurnLockMsg(cosmosMsg, claimType)
 						}
 					}
@@ -190,7 +206,7 @@ func GetAllProphecyClaim(client *ethclient.Client, ethereumAddress common.Addres
 	eIP155Signer := ethTypes.NewEIP155Signer(big.NewInt(1))
 
 	CosmosBridgeContractABI := contract.LoadABI(txs.CosmosBridge)
-	methodID := CosmosBridgeContractABI.Methods[types.NewProphecyClaim.String()].ID()
+	methodID := CosmosBridgeContractABI.Methods[types.NewProphecyClaim.String()].ID
 
 	for blockNumber := ethFromBlock; blockNumber < ethToBlock; {
 		log.Printf("getAllProphecyClaim current blockNumber is %d\n", blockNumber)
@@ -276,7 +292,7 @@ func MessageProcessed(message types.CosmosMsg, prophecyClaims []types.ProphecyCl
 }
 
 // Replay the missed events
-func (sub CosmosSub) Replay(fromBlock int64, toBlock int64, ethFromBlock int64, ethToBlock int64) {
+func (sub CosmosSub) Replay(symbolTranslator *symbol_translator.SymbolTranslator, fromBlock int64, toBlock int64, ethFromBlock int64, ethToBlock int64) {
 	// Start Ethereum client
 	ethClient, err := ethclient.Dial(sub.EthProvider)
 	if err != nil {
@@ -317,7 +333,10 @@ func (sub CosmosSub) Replay(fromBlock int64, toBlock int64, ethFromBlock int64, 
 
 	for blockNumber := fromBlock; blockNumber < toBlock; {
 		tmpBlockNumber := blockNumber
-		block, err := client.BlockResults(&tmpBlockNumber)
+
+		ctx := context.Background()
+		block, err := client.BlockResults(ctx, &tmpBlockNumber)
+
 		blockNumber++
 		log.Printf("Replay start to process block %d\n", blockNumber)
 
@@ -335,7 +354,7 @@ func (sub CosmosSub) Replay(fromBlock int64, toBlock int64, ethFromBlock int64, 
 				case types.MsgBurn, types.MsgLock:
 					log.Println("found out a lock burn message")
 
-					cosmosMsg, err := txs.BurnLockEventToCosmosMsg(claimType, event.GetAttributes(), sub.SugaredLogger)
+					cosmosMsg, err := txs.BurnLockEventToCosmosMsg(claimType, event.GetAttributes(), symbolTranslator, sub.SugaredLogger)
 					if err != nil {
 						log.Println(err)
 						continue
@@ -367,20 +386,83 @@ func getOracleClaimType(eventType string) types.Event {
 	return claimType
 }
 
+func tryInitRelayConfig(sub CosmosSub, claimType types.Event) (*ethclient.Client, *bind.TransactOpts, common.Address, error) {
+
+	for i := 0; i < 5; i++ {
+		client, auth, target, err := txs.InitRelayConfig(
+			sub.EthProvider,
+			sub.RegistryContractAddress,
+			claimType,
+			sub.PrivateKey,
+			sub.SugaredLogger,
+		)
+
+		if err != nil {
+			sub.SugaredLogger.Errorw("failed in init relay config.",
+				errorMessageKey, err.Error())
+			continue
+		}
+		return client, auth, target, err
+	}
+
+	return nil, nil, common.Address{}, errors.New("hit max initRelayConfig retries")
+}
+
 // Parses event data from the msg, event, builds a new ProphecyClaim, and relays it to Ethereum
-func (sub CosmosSub) handleBurnLockMsg(cosmosMsg types.CosmosMsg, claimType types.Event) {
+func (sub CosmosSub) handleBurnLockMsg(
+	cosmosMsg types.CosmosMsg,
+	claimType types.Event,
+) {
 	sub.SugaredLogger.Infow("handle burn lock message.",
 		"cosmosMessage", cosmosMsg.String())
 
-	prophecyClaim := txs.CosmosMsgToProphecyClaim(cosmosMsg)
+	sub.SugaredLogger.Infow(
+		"get the prophecy claim.",
+		"cosmosMsg", cosmosMsg,
+	)
 
-	sub.SugaredLogger.Infow("get the prophecy claim.",
-		"CosmosSender", prophecyClaim.CosmosSender,
-		"CosmosSenderSequence", prophecyClaim.CosmosSenderSequence)
-
-	err := txs.RelayProphecyClaimToEthereum(sub.EthProvider, sub.RegistryContractAddress,
-		claimType, prophecyClaim, sub.PrivateKey, sub.SugaredLogger)
+	client, auth, target, err := tryInitRelayConfig(sub, claimType)
 	if err != nil {
-		log.Println(err)
+		sub.SugaredLogger.Errorw("failed in init relay config.",
+			errorMessageKey, err.Error())
+		return
+	}
+
+	// Initialize CosmosBridge instance
+	cosmosBridgeInstance, err := cosmosbridge.NewCosmosBridge(target, client)
+	if err != nil {
+		sub.SugaredLogger.Errorw("failed to get cosmosBridge instance.",
+			errorMessageKey, err.Error())
+		return
+	}
+
+	maxRetries := 5
+	i := 0
+
+	for i < maxRetries {
+		err = txs.RelayProphecyClaimToEthereum(
+			cosmosMsg,
+			sub.SugaredLogger,
+			client,
+			auth,
+			cosmosBridgeInstance,
+		)
+
+		if err != nil {
+			sub.SugaredLogger.Errorw(
+				"failed to send new prophecyclaim to ethereum",
+				errorMessageKey, err.Error(),
+			)
+		} else {
+			break
+		}
+		i++
+	}
+
+	if i == maxRetries {
+		sub.SugaredLogger.Errorw("failed to broadcast transaction after 5 attempts")
+		if err != nil {
+			sub.SugaredLogger.Errorw("error for failed broadcast is", errorMessageKey, err)
+		}
 	}
 }

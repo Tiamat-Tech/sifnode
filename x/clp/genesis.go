@@ -2,56 +2,95 @@ package clp
 
 import (
 	"fmt"
-	"github.com/Sifchain/sifnode/x/clp/types"
+	"math"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/pkg/errors"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	"github.com/cosmos/cosmos-sdk/types/query"
 	abci "github.com/tendermint/tendermint/abci/types"
+
+	"github.com/Sifchain/sifnode/x/clp/keeper"
+	"github.com/Sifchain/sifnode/x/clp/types"
 )
 
-func InitGenesis(ctx sdk.Context, keeper Keeper, data types.GenesisState) (res []abci.ValidatorUpdate) {
-	keeper.SetParams(ctx, data.Params)
+func InitGenesis(ctx sdk.Context, k keeper.Keeper, data types.GenesisState) (res []abci.ValidatorUpdate) {
+	k.SetParams(ctx, data.Params)
+	k.SetRewardParams(ctx, types.GetDefaultRewardParams())
+	// Initiate Pmtp
+	k.SetPmtpRateParams(ctx, types.PmtpRateParams{
+		PmtpPeriodBlockRate:    sdk.ZeroDec(),
+		PmtpCurrentRunningRate: sdk.ZeroDec(),
+		PmtpInterPolicyRate:    sdk.ZeroDec(),
+	})
+	k.SetPmtpEpoch(ctx, types.PmtpEpoch{
+		EpochCounter: 0,
+		BlockCounter: 0,
+	})
+	k.SetPmtpParams(ctx, types.GetDefaultPmtpParams())
+
+	k.SetPmtpInterPolicyRate(ctx, sdk.NewDec(0))
 	if data.AddressWhitelist == nil || len(data.AddressWhitelist) == 0 {
-	    panic(fmt.Sprintf("AddressWhiteList must be set."))
+		panic("AddressWhiteList must be set.")
 	}
-	keeper.SetClpWhiteList(ctx, data.AddressWhitelist)
+	wl := make([]sdk.AccAddress, len(data.AddressWhitelist))
+	if data.AddressWhitelist != nil {
+		for i, entry := range data.AddressWhitelist {
+			wlAddress, err := sdk.AccAddressFromBech32(entry)
+			if err != nil {
+				panic(err)
+			}
+			wl[i] = wlAddress
+		}
+		k.SetClpWhiteList(ctx, wl)
+	}
+	k.SetClpWhiteList(ctx, wl)
 	for _, pool := range data.PoolList {
-		err := keeper.SetPool(ctx, pool)
+		err := k.SetPool(ctx, pool)
 		if err != nil {
 			panic(fmt.Sprintf("Pool could not be set : %s", pool.String()))
 		}
 	}
-	for _, lp := range data.LiquidityProviderList {
-		keeper.SetLiquidityProvider(ctx, lp)
+	for _, lp := range data.LiquidityProviders {
+		k.SetLiquidityProvider(ctx, lp)
 	}
 	return []abci.ValidatorUpdate{}
 }
 
-func ExportGenesis(ctx sdk.Context, keeper Keeper) types.GenesisState {
+func ExportGenesis(ctx sdk.Context, keeper keeper.Keeper) types.GenesisState {
 	params := keeper.GetParams(ctx)
-	poolList := keeper.GetPools(ctx)
-	liquidityProviders := keeper.GetLiquidityProviders(ctx)
+	var poolList []*types.Pool
+	poolList, _, _ = keeper.GetPoolsPaginated(ctx, &query.PageRequest{
+		Limit: uint64(math.MaxUint64),
+	})
+	liquidityProviders, _, _ := keeper.GetAllLiquidityProvidersPaginated(ctx, &query.PageRequest{
+		Limit: uint64(math.MaxUint64),
+	})
 	whiteList := keeper.GetClpWhiteList(ctx)
-	return GenesisState{
-		Params:                params,
-		AddressWhitelist:      whiteList,
-		PoolList:              poolList,
-		LiquidityProviderList: liquidityProviders,
+	wl := make([]string, len(whiteList))
+	for i, entry := range whiteList {
+		wl[i] = entry.String()
+	}
+	return types.GenesisState{
+		Params:             params,
+		AddressWhitelist:   wl,
+		PoolList:           poolList,
+		LiquidityProviders: liquidityProviders,
 	}
 }
 
 // ValidateGenesis validates the clp genesis parameters
-func ValidateGenesis(data GenesisState) error {
-	if !data.Params.Validate() {
-		return errors.Wrap(types.ErrInvalid, fmt.Sprintf("Params are invalid : %s", data.Params.String()))
+func ValidateGenesis(data types.GenesisState) error {
+	if err := data.Params.Validate(); err != nil {
+		return sdkerrors.Wrap(types.ErrInvalid, fmt.Sprintf("clp: params are invalid : %s \n %s", err.Error(), data.Params.String()))
 	}
 	for _, pool := range data.PoolList {
 		if !pool.Validate() {
-			return errors.Wrap(types.ErrInvalid, fmt.Sprintf("Pool is invalid : %s", pool.String()))
+			return sdkerrors.Wrap(types.ErrInvalid, fmt.Sprintf("clp: pool is invalid : %s", pool.String()))
 		}
 	}
-	for _, lp := range data.LiquidityProviderList {
+	for _, lp := range data.LiquidityProviders {
 		if !lp.Validate() {
-			return errors.Wrap(types.ErrInvalid, fmt.Sprintf("LiquidityProvider is invalid : %s", lp.String()))
+			return sdkerrors.Wrap(types.ErrInvalid, fmt.Sprintf("clp: liquidityProvider is invalid : %s", lp.String()))
 		}
 	}
 	return nil

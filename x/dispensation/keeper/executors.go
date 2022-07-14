@@ -2,25 +2,25 @@ package keeper
 
 import (
 	"fmt"
+
 	"github.com/Sifchain/sifnode/x/dispensation/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/x/bank"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	"github.com/pkg/errors"
 )
 
 //CreateAndDistributeDrops creates new drop Records . These records are then used to facilitate distribution
 // Each Recipient and DropName generate a unique Record
-func (k Keeper) CreateDrops(ctx sdk.Context, output []bank.Output, name string) error {
+func (k Keeper) CreateDrops(ctx sdk.Context, output []banktypes.Output, name string, distributionType types.DistributionType, authorizedRunner string) error {
 	for _, receiver := range output {
-		distributionRecord := types.NewDistributionRecord(name, receiver.Address, receiver.Coins, ctx.BlockHeight(), -1)
-		if k.ExistsDistributionRecord(ctx, name, receiver.Address.String()) {
-			oldRecord, err := k.GetDistributionRecord(ctx, name, receiver.Address.String())
+		distributionRecord := types.NewDistributionRecord(types.DistributionStatus_DISTRIBUTION_STATUS_PENDING, distributionType, name, receiver.Address, receiver.Coins, ctx.BlockHeight(), -1, authorizedRunner)
+		if k.ExistsDistributionRecord(ctx, name, receiver.Address, types.DistributionStatus_DISTRIBUTION_STATUS_PENDING, distributionRecord.DistributionType) {
+			oldRecord, err := k.GetDistributionRecord(ctx, name, receiver.Address, types.DistributionStatus_DISTRIBUTION_STATUS_PENDING, distributionRecord.DistributionType)
 			if err != nil {
 				return errors.Wrapf(types.ErrDistribution, "failed appending record for : %s", distributionRecord.RecipientAddress)
 			}
-			distributionRecord.Add(oldRecord)
+			distributionRecord = distributionRecord.Add(*oldRecord)
 		}
-		distributionRecord.ClaimStatus = types.Pending
 		err := k.SetDistributionRecord(ctx, distributionRecord)
 		if err != nil {
 			return errors.Wrapf(types.ErrFailedOutputs, "error setting distibution record  : %s", distributionRecord.String())
@@ -29,45 +29,75 @@ func (k Keeper) CreateDrops(ctx sdk.Context, output []bank.Output, name string) 
 	return nil
 }
 
-//DistributeDrops is called at the beginning of every block .
-// It checks if any pending records are present , if there are it completes the top 10
-func (k Keeper) DistributeDrops(ctx sdk.Context, height int64) error {
-	pendingRecords := k.GetPendingRecordsLimited(ctx, 10)
-	for _, record := range pendingRecords {
-		err := k.GetSupplyKeeper().SendCoinsFromModuleToAccount(ctx, types.ModuleName, record.RecipientAddress, record.Coins)
+// DistributeDrops is called at the beginning of every block .
+// It checks if any pending records are present , if there are it completes the top 'distributionCount' items
+func (k Keeper) DistributeDrops(ctx sdk.Context,
+	height int64,
+	distributionName string,
+	authorizedRunner string,
+	distributionType types.DistributionType,
+	distributionCount int64) (*types.DistributionRecords, error) {
+	pendingRecords := k.GetLimitedRecordsForRunner(ctx, distributionName, authorizedRunner, distributionType, types.DistributionStatus_DISTRIBUTION_STATUS_PENDING, distributionCount)
+	for _, record := range pendingRecords.DistributionRecords {
+		recipientAddress, err := sdk.AccAddressFromBech32(record.RecipientAddress)
 		if err != nil {
-			return errors.Wrapf(types.ErrFailedOutputs, "for address  : %s", record.RecipientAddress.String())
+			err := errors.Wrapf(err, "Invalid address for distribute : %s", record.RecipientAddress)
+			ctx.Logger().Error(err.Error())
+			continue
 		}
-		record.ClaimStatus = types.Completed
-		record.DistributionCompletedHeight = height
-		err = k.SetDistributionRecord(ctx, record)
+		err = k.GetBankKeeper().SendCoinsFromModuleToAccount(ctx, types.ModuleName, recipientAddress, record.Coins)
 		if err != nil {
-			return errors.Wrapf(types.ErrFailedOutputs, "error setting distibution record  : %s", record.String())
+			err := errors.Wrapf(types.ErrFailedOutputs, "for address  : %s", record.RecipientAddress)
+			ctx.Logger().Error(err.Error())
+			err = k.ChangeRecordStatus(ctx, *record, height, types.DistributionStatus_DISTRIBUTION_STATUS_FAILED)
+			if err != nil {
+				panic(fmt.Sprintf("Unable to set Distribution Records to Failed : %s", record.String()))
+			}
+			continue
 		}
-		ctx.Logger().Info(fmt.Sprintf("Distributed to : %s | At height : %d | Amount :%s \n", record.RecipientAddress.String(), height, record.Coins.String()))
+
+		err = k.ChangeRecordStatus(ctx, *record, height, types.DistributionStatus_DISTRIBUTION_STATUS_COMPLETED)
+		if err != nil {
+			err := errors.Wrapf(types.ErrFailedOutputs, "error setting distibution record  : %s", record.String())
+			ctx.Logger().Error(err.Error())
+			// If the SetDistributionRecord returns error , that would mean the required amount was transferred to the user , but the record was not set to completed .
+			// In this case we try to take the funds back from the user , and attempt the withdrawal later .
+			err = k.GetBankKeeper().SendCoinsFromAccountToModule(ctx, recipientAddress, types.ModuleName, record.Coins)
+			if err != nil {
+				panic(fmt.Sprintf("Unable to set Distribution Records to completed : %s", record.String()))
+			}
+			continue
+		}
+		// Use record details to delete associated claim
+		if record.DoesTypeSupportClaim() {
+			k.DeleteClaim(ctx, record.RecipientAddress, record.DistributionType)
+		}
+		ctx.Logger().Info(fmt.Sprintf("Distributed to : %s | At height : %d | Amount :%s \n", record.RecipientAddress, height, record.Coins.String()))
 	}
-	return nil
+	return pendingRecords, nil
 }
 
 // AccumulateDrops collects funds from a senders account and transfers it to the Dispensation module account
-func (k Keeper) AccumulateDrops(ctx sdk.Context, input []bank.Input) error {
-	for _, fundingInput := range input {
-		err := k.GetSupplyKeeper().SendCoinsFromAccountToModule(ctx, fundingInput.Address, types.ModuleName, fundingInput.Coins)
-		if err != nil {
-			return errors.Wrapf(types.ErrFailedInputs, "for address  : %s", fundingInput.Address.String())
-		}
+func (k Keeper) AccumulateDrops(ctx sdk.Context, addr string, amount sdk.Coins) error {
+	address, err := sdk.AccAddressFromBech32(addr)
+	if err != nil {
+		return errors.Wrapf(err, "Invalid address for distribute : %s", addr)
+	}
+	err = k.GetBankKeeper().SendCoinsFromAccountToModule(ctx, address, types.ModuleName, amount)
+	if err != nil {
+		return errors.Wrapf(types.ErrFailedInputs, "for address  : %s", addr)
 	}
 	return nil
 }
 
 // Verify if the distribution is correct
 // The verification is the for distributionName + distributionType
-func (k Keeper) VerifyDistribution(ctx sdk.Context, distributionName string, distributionType types.DistributionType) error {
-	if k.ExistsDistribution(ctx, distributionName, distributionType) {
+func (k Keeper) VerifyAndSetDistribution(ctx sdk.Context, distributionName string, distributionType types.DistributionType, authorizedRunner string) error {
+	if k.ExistsDistribution(ctx, distributionName, distributionType, authorizedRunner) {
 		return errors.Wrapf(types.ErrDistribution, "airdrop with same name already exists : %s ", distributionName)
 	}
 	// Create distribution only if a distribution with the same name does not exist
-	err := k.SetDistribution(ctx, types.NewDistribution(distributionType, distributionName))
+	err := k.SetDistribution(ctx, types.NewDistribution(distributionType, distributionName, authorizedRunner))
 	if err != nil {
 		return errors.Wrapf(types.ErrDistribution, "unable to set airdrop :  %s ", distributionName)
 

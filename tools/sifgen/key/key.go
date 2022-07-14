@@ -1,12 +1,12 @@
 package key
 
 import (
-	"github.com/Sifchain/sifnode/app"
-
-	"github.com/cosmos/cosmos-sdk/crypto/keys"
-	"github.com/cosmos/cosmos-sdk/crypto/keys/hd"
+	"github.com/cosmos/cosmos-sdk/crypto/hd"
+	"github.com/cosmos/cosmos-sdk/crypto/keyring"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/tyler-smith/go-bip39"
+
+	"github.com/Sifchain/sifnode/app"
 )
 
 var (
@@ -14,20 +14,20 @@ var (
 )
 
 type Key struct {
-	Name             *string
+	Name             string
 	Mnemonic         string
-	Password         *string
+	Password         string
 	Address          string
 	ValidatorAddress string
 	ConsensusAddress string
-	Keybase          keys.Keybase
+	Keyring          keyring.Keyring
 }
 
-func NewKey(name, password *string) *Key {
+func NewKey(name, password string) *Key {
 	return &Key{
 		Name:     name,
 		Password: password,
-		Keybase:  keys.NewInMemory(keys.WithSupportedAlgosLedger([]keys.SigningAlgo{keys.Secp256k1, keys.Ed25519})),
+		Keyring:  keyring.NewInMemory(),
 	}
 }
 
@@ -41,7 +41,7 @@ func (k *Key) RecoverFromMnemonic(mnemonic string) error {
 	k.setConfig()
 	k.Mnemonic = mnemonic
 
-	account, err := k.Keybase.CreateAccount(*k.Name, k.Mnemonic, "", *k.Password, hdpath.String(), keys.Secp256k1)
+	account, err := k.Keyring.NewAccount(k.Name, k.Mnemonic, k.Password, hdpath.String(), hd.Secp256k1)
 	if err != nil {
 		return err
 	}
@@ -61,5 +61,4 @@ func (k *Key) setConfig() {
 	config.SetBech32PrefixForAccount(app.AccountAddressPrefix, app.AccountPubKeyPrefix)
 	config.SetBech32PrefixForValidator(app.ValidatorAddressPrefix, app.ValidatorPubKeyPrefix)
 	config.SetBech32PrefixForConsensusNode(app.ConsNodeAddressPrefix, app.ConsNodePubKeyPrefix)
-	config.Seal()
 }

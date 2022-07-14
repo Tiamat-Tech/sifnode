@@ -3,4 +3,9 @@
 node_modules/
 flat/
 .env
+.env.bak
+.env.bak.1
 venv
+/artifacts/
+/cache/
+/.idea/

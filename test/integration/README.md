@@ -36,6 +36,7 @@ Run the tests in a container with:
 ```
 cd /sifnode/test/integration
 ./start-integration-env.sh && . vagrantenv.sh
+pip3  install -r src/py/requirements.txt
 python3 -m pytest -v src/py/test_*
 ```
 
@@ -61,7 +62,7 @@ test/integration/start-integration-env.sh
 ```
 # cd ~/workspace/sifnode/test/integration 
 # source ./exampleenv.sh
-# sifnodecli q auth account --node tcp://44.241.55.154:26657 sif1pvnu2kh826vn8r0ttlgt82hsmfknvcnf7qmpvk
+# sifnoded q auth account --node tcp://44.241.55.154:26657 sif1pvnu2kh826vn8r0ttlgt82hsmfknvcnf7qmpvk
 # ...
 ```
 

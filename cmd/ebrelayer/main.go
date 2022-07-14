@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"net/url"
@@ -9,62 +8,78 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Sifchain/sifnode/app"
+	"github.com/Sifchain/sifnode/cmd/ebrelayer/internal/symbol_translator"
+	"github.com/Sifchain/sifnode/cmd/ebrelayer/txs"
+	ebrelayertypes "github.com/Sifchain/sifnode/cmd/ebrelayer/types"
+	flag "github.com/spf13/pflag"
+
+	sifapp "github.com/Sifchain/sifnode/app"
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/contract"
 	"github.com/Sifchain/sifnode/cmd/ebrelayer/relayer"
-	"github.com/Sifchain/sifnode/cmd/ebrelayer/txs"
+	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/rpc"
-	"github.com/cosmos/cosmos-sdk/codec"
+	"github.com/cosmos/cosmos-sdk/client/tx"
+	"github.com/cosmos/cosmos-sdk/server"
+	svrcmd "github.com/cosmos/cosmos-sdk/server/cmd"
+	"github.com/cosmos/cosmos-sdk/x/auth/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/syndtr/goleveldb/leveldb"
-	"github.com/tendermint/tendermint/libs/cli"
 	"go.uber.org/zap"
 )
 
-var cdc *codec.Codec
+func buildRootCmd() *cobra.Command {
+	// see cmd/sifnoded/cmd/root.go:37 ; we need to do the
+	// same thing in ebrelayer
+	encodingConfig := sifapp.MakeTestEncodingConfig()
+	initClientCtx := client.Context{}.
+		WithCodec(encodingConfig.Marshaler).
+		WithInterfaceRegistry(encodingConfig.InterfaceRegistry).
+		WithTxConfig(encodingConfig.TxConfig).
+		WithLegacyAmino(encodingConfig.Amino).
+		WithInput(os.Stdin).
+		WithAccountRetriever(types.AccountRetriever{}).
+		WithBroadcastMode(flags.BroadcastBlock).
+		WithHomeDir(sifapp.DefaultNodeHome)
 
-const (
-	// FlagRPCURL defines the URL for the tendermint RPC connection
-	FlagRPCURL = "rpc-url"
-	// EnvPrefix defines the environment prefix for the root cmd
-	EnvPrefix   = "EBRELAYER"
-	levelDbFile = "relayerdb"
-)
-
-func init() {
-
-	// Read in the configuration file for the sdk
-	// config := sdk.GetConfig()
-	// config.SetBech32PrefixForAccount(sdk.Bech32PrefixAccAddr, sdk.Bech32PrefixAccPub)
-	// config.SetBech32PrefixForValidator(sdk.Bech32PrefixValAddr, sdk.Bech32PrefixValPub)
-	// config.SetBech32PrefixForConsensusNode(sdk.Bech32PrefixConsAddr, sdk.Bech32PrefixConsPub)
-	// config.Seal()
+	rootCmd := &cobra.Command{
+		Use:   "ebrelayer",
+		Short: "Streams live events from Ethereum and Cosmos and relays event information to the opposite chain",
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := cmd.Flags().Set(flags.FlagSkipConfirmation, "true"); err != nil {
+				return err
+			}
+			if err := client.SetCmdClientContextHandler(initClientCtx, cmd); err != nil {
+				return err
+			}
+			return server.InterceptConfigsPreRunHandler(cmd, "", nil)
+		},
+	}
 
 	log.SetFlags(log.Lshortfile)
 
-	app.SetConfig()
-
-	cdc = app.MakeCodec()
+	sifapp.SetConfig(true)
 
 	// Add --chain-id to persistent flags and mark it required
-	rootCmd.PersistentFlags().String(flags.FlagKeyringBackend, flags.DefaultKeyringBackend,
-		"Select keyring's backend (os|file|test)")
 	rootCmd.PersistentFlags().String(flags.FlagChainID, "", "Chain ID of tendermint node")
-	rootCmd.PersistentFlags().String(FlagRPCURL, "", "RPC URL of tendermint node")
-	rootCmd.PersistentFlags().Var(&flags.GasFlagVar, "gas", fmt.Sprintf(
+	rootCmd.PersistentFlags().String(flags.FlagGas, "gas", fmt.Sprintf(
 		"gas limit to set per-transaction; set to %q to calculate required gas automatically (default %d)",
 		flags.GasFlagAuto, flags.DefaultGasLimit,
 	))
 	rootCmd.PersistentFlags().String(flags.FlagGasPrices, "", "Gas prices to determine the transaction fee (e.g. 10uatom)")
 	rootCmd.PersistentFlags().Float64(flags.FlagGasAdjustment, flags.DefaultGasAdjustment, "gas adjustment")
-	rootCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
-		return initConfig(rootCmd)
-	}
-
+	rootCmd.PersistentFlags().String(
+		ebrelayertypes.FlagSymbolTranslatorFile,
+		"",
+		"Path to a json file containing an array of sifchain denom => Ethereum symbol pairs",
+	)
+	rootCmd.PersistentFlags().String(
+		ebrelayertypes.FlagRelayerDbPath,
+		"./relayerdb",
+		"Path to the relayerdb directory",
+	)
 	// Construct Root Command
 	rootCmd.AddCommand(
 		rpc.StatusCommand(),
@@ -74,12 +89,8 @@ func init() {
 		replayCosmosCmd(),
 		listMissedCosmosEventCmd(),
 	)
-}
 
-var rootCmd = &cobra.Command{
-	Use:          "ebrelayer",
-	Short:        "Streams live events from Ethereum and Cosmos and relays event information to the opposite chain",
-	SilenceUsage: true,
+	return rootCmd
 }
 
 //	initRelayerCmd
@@ -92,6 +103,8 @@ func initRelayerCmd() *cobra.Command {
 		Example: "ebrelayer init tcp://localhost:26657 ws://localhost:7545/ 0x30753E4A8aad7F8597332E813735Def5dD395028 validator mnemonic --chain-id=peggy",
 		RunE:    RunInitRelayerCmd,
 	}
+	//flags.AddQueryFlagsToCmd(initRelayerCmd)
+	flags.AddTxFlagsToCmd(initRelayerCmd)
 
 	return initRelayerCmd
 }
@@ -111,6 +124,17 @@ func generateBindingsCmd() *cobra.Command {
 
 // RunInitRelayerCmd executes initRelayerCmd
 func RunInitRelayerCmd(cmd *cobra.Command, args []string) error {
+	// First initialize the Cosmos features we need for the context
+	cliContext, err := client.GetClientTxContext(cmd)
+	if err != nil {
+		return err
+	}
+	log.Printf("got result from GetClientQueryContext: %v", cliContext)
+
+	levelDbFile, err := cmd.Flags().GetString(ebrelayertypes.FlagRelayerDbPath)
+	if err != nil {
+		return err
+	}
 	// Open the level db
 	db, err := leveldb.OpenFile(levelDbFile, nil)
 	if err != nil {
@@ -122,24 +146,14 @@ func RunInitRelayerCmd(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	// Load the validator's Ethereum private key from environment variables
-	privateKey, err := txs.LoadPrivateKey()
+	nodeURL, err := cmd.Flags().GetString(flags.FlagNode)
 	if err != nil {
-		return errors.Errorf("invalid [ETHEREUM_PRIVATE_KEY] environment variable")
+		return err
 	}
-
-	// Parse flag --chain-id
-	chainID := viper.GetString(flags.FlagChainID)
-	if strings.TrimSpace(chainID) == "" {
-		return errors.Errorf("Must specify a 'chain-id'")
-	}
-
-	// Parse flag --rpc-url
-	rpcURL := viper.GetString(FlagRPCURL)
-	if rpcURL != "" {
-		_, err := url.Parse(rpcURL)
-		if rpcURL != "" && err != nil {
-			return errors.Wrapf(err, "invalid RPC URL: %v", rpcURL)
+	if nodeURL != "" {
+		_, err := url.Parse(nodeURL)
+		if nodeURL != "" && err != nil {
+			return errors.Wrapf(err, "invalid RPC URL: %v", nodeURL)
 		}
 	}
 
@@ -163,7 +177,6 @@ func RunInitRelayerCmd(cmd *cobra.Command, args []string) error {
 		return errors.Errorf("invalid [validator-moniker]: %s", args[3])
 	}
 	validatorMoniker := args[3]
-	mnemonic := args[4]
 
 	logConfig := zap.NewDevelopmentConfig()
 	logConfig.Sampling = nil
@@ -181,27 +194,43 @@ func RunInitRelayerCmd(cmd *cobra.Command, args []string) error {
 	sugaredLogger := logger.Sugar()
 	zap.RedirectStdLog(sugaredLogger.Desugar())
 
-	// Initialize new Ethereum event listener
-	inBuf := bufio.NewReader(cmd.InOrStdin())
-	ethSub, err := relayer.NewEthereumSub(inBuf, rpcURL, cdc, validatorMoniker, chainID, web3Provider,
-		contractAddress, privateKey, mnemonic, db, sugaredLogger)
+	symbolTranslator, err := buildSymbolTranslator(cmd.Flags())
 	if err != nil {
 		return err
 	}
+
+	// Initialize new Ethereum event listener
+	ethSub := relayer.NewEthereumSub(
+		cliContext,
+		nodeURL,
+		validatorMoniker,
+		web3Provider,
+		contractAddress,
+		nil,
+		db,
+		sugaredLogger,
+	)
+
+	key, err := txs.LoadPrivateKey()
+	if err != nil {
+		log.Fatalf("failed to load ETHEREUM_PRIVATE_KEY")
+	}
+
 	// Initialize new Cosmos event listener
-	cosmosSub := relayer.NewCosmosSub(tendermintNode, web3Provider, contractAddress, privateKey, db, sugaredLogger)
+	cosmosSub := relayer.NewCosmosSub(tendermintNode, web3Provider, contractAddress, key, db, sugaredLogger)
 
 	waitForAll := sync.WaitGroup{}
 	waitForAll.Add(2)
-	go ethSub.Start(&waitForAll)
-	go cosmosSub.Start(&waitForAll)
+	txFactory := tx.NewFactoryCLI(cliContext, cmd.Flags())
+	go ethSub.Start(txFactory, &waitForAll, symbolTranslator)
+	go cosmosSub.Start(&waitForAll, symbolTranslator)
 	waitForAll.Wait()
 
 	return nil
 }
 
 // RunGenerateBindingsCmd : executes the generateBindingsCmd
-func RunGenerateBindingsCmd(cmd *cobra.Command, args []string) error {
+func RunGenerateBindingsCmd(_ *cobra.Command, _ []string) error {
 	contracts := contract.LoadBridgeContracts()
 
 	// Compile contracts, generating contract bins and abis
@@ -215,10 +244,6 @@ func RunGenerateBindingsCmd(cmd *cobra.Command, args []string) error {
 	return contract.GenerateBindings(contracts)
 }
 
-func initConfig(cmd *cobra.Command) error {
-	return viper.BindPFlag(flags.FlagChainID, cmd.PersistentFlags().Lookup(flags.FlagChainID))
-}
-
 func replayEthereumCmd() *cobra.Command {
 	//nolint:lll
 	replayEthereumCmd := &cobra.Command{
@@ -228,6 +253,8 @@ func replayEthereumCmd() *cobra.Command {
 		Example: "replayEthereum tcp://localhost:26657 ws://localhost:7545/ 0x30753E4A8aad7F8597332E813735Def5dD395028 validator mnemonic 100 200 100 200 --chain-id=peggy",
 		RunE:    RunReplayEthereumCmd,
 	}
+
+	flags.AddTxFlagsToCmd(replayEthereumCmd)
 
 	return replayEthereumCmd
 }
@@ -241,6 +268,8 @@ func replayCosmosCmd() *cobra.Command {
 		Example: "replayCosmos tcp://localhost:26657 ws://localhost:7545/ 0x30753E4A8aad7F8597332E813735Def5dD395028 100 200 100 200",
 		RunE:    RunReplayCosmosCmd,
 	}
+
+	flags.AddTxFlagsToCmd(replayCosmosCmd)
 
 	return replayCosmosCmd
 }
@@ -258,12 +287,29 @@ func listMissedCosmosEventCmd() *cobra.Command {
 	return listMissedCosmosEventCmd
 }
 
-func main() {
-	DefaultCLIHome := os.ExpandEnv("$HOME/.sifnodecli")
-	executor := cli.PrepareMainCmd(rootCmd, EnvPrefix, os.ExpandEnv(DefaultCLIHome))
-	err := executor.Execute()
+func buildSymbolTranslator(flags *flag.FlagSet) (*symbol_translator.SymbolTranslator, error) {
+	filename, err := flags.GetString(ebrelayertypes.FlagSymbolTranslatorFile)
+	// If FlagSymbolTranslatorFile isn't specified, just use an empty SymbolTranslator
+	if err != nil || filename == "" {
+		return symbol_translator.NewSymbolTranslator(), nil
+	}
+
+	symbolTranslator, err := symbol_translator.NewSymbolTranslatorFromJSONFile(filename)
 	if err != nil {
-		log.Fatal("failed executing CLI command", err)
-		os.Exit(1)
+		return nil, err
+	}
+
+	return symbolTranslator, nil
+}
+
+func main() {
+	if err := svrcmd.Execute(buildRootCmd(), sifapp.DefaultNodeHome); err != nil {
+		switch e := err.(type) {
+		case server.ErrorCode:
+			os.Exit(e.Code)
+
+		default:
+			os.Exit(1)
+		}
 	}
 }

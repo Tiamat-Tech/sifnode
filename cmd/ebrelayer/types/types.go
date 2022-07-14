@@ -33,6 +33,11 @@ const (
 	CreateEthBridgeClaim
 )
 
+const (
+	FlagSymbolTranslatorFile = "symbol-translator-file"
+	FlagRelayerDbPath        = "relayerdb-path"
+)
+
 // String returns the event type as a string
 func (d Event) String() string {
 	return [...]string{"unsupported", "burn", "lock", "LogLock", "LogBurn", "LogNewProphecyClaim", "newProphecyClaim", "create_claim"}[d]
@@ -40,16 +45,16 @@ func (d Event) String() string {
 
 // EthereumEvent struct is used by LogLock and LogBurn
 type EthereumEvent struct {
-	EthereumChainID       *big.Int
-	BridgeContractAddress common.Address
-	ID                    [32]byte
-	From                  common.Address
 	To                    []byte
-	Token                 common.Address
 	Symbol                string
+	EthereumChainID       *big.Int
 	Value                 *big.Int
 	Nonce                 *big.Int
 	ClaimType             ethbridge.ClaimType
+	ID                    [32]byte
+	BridgeContractAddress common.Address
+	From                  common.Address
+	Token                 common.Address
 }
 
 // Equal two events
